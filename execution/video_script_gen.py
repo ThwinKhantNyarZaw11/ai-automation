@@ -1,6 +1,6 @@
 """
-Generate a Burmese script based on video analysis + user prompt.
-Uses Gemini with video-specific context.
+Generate a script based on video analysis + user prompt.
+Uses Gemini with detailed video content analysis.
 Usage: python -m execution.video_script_gen --analysis_json <path> --user_prompt "..."
 """
 import argparse
@@ -10,30 +10,33 @@ from pathlib import Path
 from execution.gemini_generate import generate_text
 from execution.config import TMP_DIR
 
-SYSTEM_PROMPT = """You are an expert Burmese-language scriptwriter who creates scripts based on video content.
-Given a video analysis and a user's desired transformation, write a new script in Burmese.
 
-Guidelines:
-- Write entirely in Burmese script (Myanmar Unicode)
-- Follow the user's transformation instructions precisely
-- Maintain the video's structure and key moments
-- Create engaging narration suitable for the video
-"""
+def generate_video_script(analysis: dict, user_prompt: str, output_path: str = None,
+                          language: str = "English", target_words: int = 3000) -> str:
+    """Generate a script based on video analysis and user prompt."""
+    content_analysis = analysis.get("content_analysis", "No analysis available")
 
+    system_prompt = f"""You are a professional scriptwriter. You write scripts in {language}.
 
-def generate_video_script(analysis: dict, user_prompt: str, output_path: str = None) -> str:
-    """Generate a Burmese script based on video analysis and user prompt."""
-    prompt = f"""Video Analysis:
-- Duration: {analysis.get('duration', 0)} seconds
-- Format: {analysis.get('format', 'unknown')}
-- Keyframes captured: {len(analysis.get('keyframes', []))}
-- Metadata: {json.dumps(analysis.get('metadata', {}), ensure_ascii=False)}
+CRITICAL RULES:
+- Write ENTIRELY in {language}
+- Write EXACTLY {target_words} words
+- Base the script ACCURATELY on the video content analysis provided
+- Follow the user's style/prompt instructions precisely
+- Use natural, fluent {language} — not machine-translated text
+- Do NOT include any labels like "Part 1" or "Section 1" or headers
+- Just write continuous, seamless script text that flows naturally"""
 
-User's Request: {user_prompt}
+    prompt = f"""Video Content Analysis:
+{content_analysis}
 
-Based on this video analysis and the user's request, write a complete Burmese script."""
+User's Instructions: {user_prompt}
 
-    result = generate_text(prompt, system_prompt=SYSTEM_PROMPT)
+Based on the detailed video content analysis above and the user's instructions, write a complete script.
+The script must accurately reflect what happens in the video.
+Write exactly {target_words} words in {language}."""
+
+    result = generate_text(prompt, system_prompt=system_prompt)
 
     if output_path:
         Path(output_path).write_text(result, encoding="utf-8")
@@ -42,14 +45,17 @@ Based on this video analysis and the user's request, write a complete Burmese sc
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate video script in Burmese")
+    parser = argparse.ArgumentParser(description="Generate video script")
     parser.add_argument("--analysis_json", required=True)
     parser.add_argument("--user_prompt", required=True)
     parser.add_argument("--output_path", default=str(TMP_DIR / "video_script.txt"))
+    parser.add_argument("--language", default="English")
+    parser.add_argument("--target_words", type=int, default=3000)
     args = parser.parse_args()
 
     with open(args.analysis_json, "r", encoding="utf-8") as f:
         analysis = json.load(f)
 
-    script = generate_video_script(analysis, args.user_prompt, args.output_path)
+    script = generate_video_script(analysis, args.user_prompt, args.output_path,
+                                   args.language, args.target_words)
     print(script)

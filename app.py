@@ -5,13 +5,13 @@ Serves the chat UI, handles WebSocket connections and file uploads.
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from execution.config import APP_HOST, APP_PORT, STATIC_DIR
 from execution.file_handler import save_upload
-from execution.workflow_handlers import handle_message, WELCOME_MESSAGE
+from execution.workflow_handlers import handle_message, get_workflow_welcome
 
 app = FastAPI(title="AI Automation System")
 
@@ -46,13 +46,20 @@ async def upload_file(session_id: str, file: UploadFile = File(...)):
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
+async def websocket_endpoint(ws: WebSocket, workflow: str = Query(default=None)):
     await ws.accept()
     session_id = str(uuid.uuid4())
 
-    # Send welcome message
+    # Send session info
     await ws.send_json({"type": "session", "session_id": session_id})
-    await ws.send_json({"type": "message", "text": WELCOME_MESSAGE})
+
+    # Auto-start the workflow if specified
+    if workflow and workflow in ["1", "2", "3", "4", "5"]:
+        welcome_msgs = get_workflow_welcome(session_id, workflow)
+        for msg in welcome_msgs:
+            await ws.send_json(msg)
+    else:
+        await ws.send_json({"type": "message", "text": "Send a message to get started."})
 
     try:
         while True:
@@ -68,7 +75,6 @@ async def websocket_endpoint(ws: WebSocket):
                     await ws.send_json(resp)
 
             elif data.get("type") == "upload_complete":
-                # Client signals upload is done, files are in _pending_files
                 await ws.send_json({"type": "status", "text": f"File received: {data.get('filename', '')}"})
 
     except WebSocketDisconnect:

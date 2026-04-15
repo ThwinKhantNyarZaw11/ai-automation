@@ -3,30 +3,172 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Automation System</title>
+    <title>AI Automation</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="chat-container">
-        <header class="chat-header">
-            <h1>AI Automation System</h1>
-            <span class="status" id="status">Connecting...</span>
-        </header>
-
-        <div class="messages" id="messages"></div>
-
-        <div class="input-area">
-            <div class="upload-zone" id="uploadZone">
-                <input type="file" id="fileInput" multiple hidden>
-                <button class="upload-btn" id="uploadBtn" title="Upload file">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                        <path d="M2 17l10 5 10-5"/>
+                        <path d="M2 12l10 5 10-5"/>
                     </svg>
+                    <span>AI Automation</span>
+                </div>
+            </div>
+
+            <!-- New Chat Buttons -->
+            <div class="sidebar-section">
+                <div class="section-label">New Chat</div>
+                <button class="new-chat-btn" data-workflow="1">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                    </svg>
+                    Source Finder
+                </button>
+                <button class="new-chat-btn" data-workflow="2">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                    </svg>
+                    Video + Audio
+                </button>
+                <button class="new-chat-btn" data-workflow="3">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                    </svg>
+                    Video Changer
+                </button>
+                <button class="new-chat-btn" data-workflow="4">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                    </svg>
+                    Script Changer
+                </button>
+                <button class="new-chat-btn" data-workflow="5">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                        <polyline points="21 15 16 10 5 21"/>
+                    </svg>
+                    Image + Audio
                 </button>
             </div>
-            <input type="text" id="messageInput" placeholder="Type a message..." autocomplete="off">
-            <button id="sendBtn">Send</button>
-        </div>
+
+            <!-- Active Chats -->
+            <div class="sidebar-section chats-section">
+                <div class="section-label">Active Chats</div>
+                <div class="chat-tabs" id="chatTabs">
+                    <!-- Chat tabs are added dynamically -->
+                    <div class="empty-chats" id="emptyChats">No active chats</div>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="connection-status" id="connectionStatus">
+                    <span class="status-dot"></span>
+                    <span id="status">Connecting...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-main">
+            <!-- Header -->
+            <header class="chat-header" id="chatHeader">
+                <div class="header-left">
+                    <button class="icon-btn sidebar-toggle" id="sidebarToggle">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="3" y1="12" x2="21" y2="12"/>
+                            <line x1="3" y1="6" x2="21" y2="6"/>
+                            <line x1="3" y1="18" x2="21" y2="18"/>
+                        </svg>
+                    </button>
+                    <div class="header-info">
+                        <h1 id="chatTitle">AI Automation</h1>
+                        <span class="header-subtitle" id="chatSubtitle">Select a workflow to start</span>
+                    </div>
+                </div>
+                <button class="icon-btn close-chat-btn" id="closeChatBtn" title="Close this chat" style="display:none;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </header>
+
+            <!-- Welcome (no chat selected) -->
+            <div class="welcome-screen" id="welcomeScreen">
+                <div class="welcome-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                        <path d="M2 17l10 5 10-5"/>
+                        <path d="M2 12l10 5 10-5"/>
+                    </svg>
+                </div>
+                <h2>Welcome</h2>
+                <p>Click a workflow on the left to open a new chat.</p>
+                <div class="quick-actions">
+                    <button class="quick-btn" data-workflow="1">
+                        <span class="qb-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
+                        <div><div class="qb-title">Source Finder</div><div class="qb-desc">YouTube analysis + Burmese script</div></div>
+                    </button>
+                    <button class="quick-btn" data-workflow="2">
+                        <span class="qb-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></span>
+                        <div><div class="qb-title">Video + Audio</div><div class="qb-desc">Combine video and audio files</div></div>
+                    </button>
+                    <button class="quick-btn" data-workflow="3">
+                        <span class="qb-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></span>
+                        <div><div class="qb-title">Video Changer</div><div class="qb-desc">Transform video with custom prompt</div></div>
+                    </button>
+                    <button class="quick-btn" data-workflow="4">
+                        <span class="qb-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+                        <div><div class="qb-title">Script Changer</div><div class="qb-desc">Edit scripts + generate images</div></div>
+                    </button>
+                    <button class="quick-btn" data-workflow="5">
+                        <span class="qb-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span>
+                        <div><div class="qb-title">Image + Audio</div><div class="qb-desc">Slideshow video with zoom animation</div></div>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chat messages container (one per chat, toggled via JS) -->
+            <div class="chat-panels" id="chatPanels"></div>
+
+            <!-- Input area -->
+            <div class="input-area" id="inputArea" style="display:none;">
+                <div class="input-wrapper">
+                    <button class="input-action" id="uploadBtn" title="Upload file">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+                        </svg>
+                    </button>
+                    <input type="file" id="fileInput" multiple hidden>
+                    <input type="text" id="messageInput" placeholder="Type a message..." autocomplete="off">
+                    <button class="input-action send-btn" id="sendBtn" title="Send">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"/>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Drop overlay -->
+    <div class="drop-overlay" id="dropOverlay">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span>Drop files here</span>
     </div>
 
     <script src="/static/app.js"></script>

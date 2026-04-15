@@ -12,14 +12,29 @@ from execution.google_drive_auth import get_drive_service
 from execution.config import GDRIVE_OUTPUT_FOLDER_ID
 
 
+def is_drive_available() -> bool:
+    """Check if Google Drive credentials are configured."""
+    from execution.google_drive_auth import CREDENTIALS_PATH, TOKEN_PATH
+    return CREDENTIALS_PATH.exists() or TOKEN_PATH.exists()
+
+
 def upload_to_drive(file_path: str, folder_id: str = None, mime_type: str = None) -> dict:
     """
     Upload a file to Google Drive.
     Returns dict with 'id', 'name', and 'url' of the uploaded file.
+    If credentials are not configured, returns a placeholder result.
     """
     file_path = Path(file_path)
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
+
+    if not is_drive_available():
+        return {
+            "id": "local",
+            "name": file_path.name,
+            "url": f"file:///{file_path}",
+            "local_only": True,
+        }
 
     folder_id = folder_id or GDRIVE_OUTPUT_FOLDER_ID
     if not mime_type:

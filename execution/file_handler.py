@@ -32,4 +32,7 @@ def cleanup_session(session_id: str):
     """Remove all temp files for a session."""
     session_dir = TMP_DIR / session_id
     if session_dir.exists():
-        shutil.rmtree(session_dir)
+        try:
+            shutil.rmtree(session_dir, ignore_errors=True)
+        except Exception:
+            pass
