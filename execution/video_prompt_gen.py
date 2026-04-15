@@ -147,10 +147,14 @@ def generate_video_prompts(
     background: str,
     consistency: bool,
     output_dir: str = None,
+    name_prefix: str = None,
 ) -> dict:
     """
     Generate I2V and T2V prompts for all scenes.
     Returns dict with paths to the two output files.
+
+    If `name_prefix` is provided, outputs are named
+    `{prefix}_image_to_video_prompts.txt` and `{prefix}_text_to_video_prompts.txt`.
     """
     output_dir = Path(output_dir) if output_dir else TMP_DIR / "video_prompts"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -239,8 +243,9 @@ Generate exactly {PROMPTS_PER_SCENE} T2V prompt variations for this paragraph. O
               f"({len(t2v_data['variations'])} variations)")
 
     # Save as .txt files containing JSON
-    i2v_path = output_dir / "image_to_video_prompts.txt"
-    t2v_path = output_dir / "text_to_video_prompts.txt"
+    prefix = f"{name_prefix}_" if name_prefix else ""
+    i2v_path = output_dir / f"{prefix}image_to_video_prompts.txt"
+    t2v_path = output_dir / f"{prefix}text_to_video_prompts.txt"
 
     i2v_output = {
         "type": "image_to_video",

@@ -6,6 +6,7 @@ const WORKFLOW_NAMES = {
     '3': 'Video Changer',
     '4': 'Script Changer',
     '5': 'Image + Audio',
+    '6': 'Script to Voice',
 };
 
 // State: multiple chats, each with its own WebSocket

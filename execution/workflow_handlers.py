@@ -4,10 +4,39 @@ validates input, calls execution scripts, updates state, returns response messag
 """
 import re
 import traceback
+from pathlib import Path
 from execution.state_manager import (
     State, get_state, set_state, set_workflow, get_data, set_data, reset_session
 )
 from execution.file_handler import cleanup_session
+
+
+# Characters not allowed in Windows/Unix filenames
+_UNSAFE_FS_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+
+
+def _safe_stem(name: str, fallback: str = "output") -> str:
+    """
+    Turn an original filename (or arbitrary label like a video title) into a
+    filesystem-safe stem. Strips the extension (if any), removes unsafe
+    characters, collapses whitespace, trims length. Returns `fallback` if
+    nothing usable remains.
+    """
+    if not name:
+        return fallback
+    s = str(name)
+    # Strip only the final extension if present (don't let Path split on '/')
+    if "." in s:
+        base, _, ext = s.rpartition(".")
+        # Only treat as extension if it's short and alnum (not part of a title)
+        if base and 0 < len(ext) <= 5 and ext.isalnum():
+            s = base
+    # Remove filesystem-unsafe characters
+    s = _UNSAFE_FS_CHARS.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip().strip(".")
+    # Limit to 80 chars so the full path stays well under OS limits
+    s = s[:80].rstrip()
+    return s or fallback
 
 
 WELCOME_MESSAGE = """Welcome! Please choose a workflow:
@@ -16,6 +45,7 @@ WELCOME_MESSAGE = """Welcome! Please choose a workflow:
 3. Video Changer
 4. Script Changer
 5. Image + Audio Slideshow
+6. Script to Voice
 
 Type the number or name of the workflow you want to use."""
 
@@ -26,6 +56,7 @@ WORKFLOW_INTROS = {
     "3": {"name": "Video Changer", "msg": "Please send a video file."},
     "4": {"name": "Script Changer", "msg": "Please send your script file."},
     "5": {"name": "Image + Audio Slideshow", "msg": "Please send:\n1. An audio file (mp3, wav, m4a, etc.)\n2. Multiple image files (jpg, png)\n\nI'll create a slideshow video with zoom-in/zoom-out animation between images, timed to match your audio length."},
+    "6": {"name": "Script to Voice", "msg": "Please upload your script file (.docx or .txt).\n\nI'll read each page in parallel and combine them into one audio file."},
 }
 
 WORKFLOW_INIT = {
@@ -34,6 +65,7 @@ WORKFLOW_INIT = {
     "3": ("wf3", State.WF3_AWAITING_VIDEO),
     "4": ("wf4", State.WF4_AWAITING_SCRIPT),
     "5": ("wf5", State.WF5_AWAITING_FILES),
+    "6": ("wf6", State.WF6_AWAITING_SCRIPT),
 }
 
 
@@ -96,6 +128,10 @@ async def handle_message(session_id: str, text: str, files: list[dict] = None) -
         if state.name.startswith("WF5"):
             return await _handle_wf5(session_id, state, text, files)
 
+        # Workflow 6
+        if state.name.startswith("WF6"):
+            return await _handle_wf6(session_id, state, text, files)
+
     except Exception as e:
         traceback.print_exc()
         return [{"type": "message", "text": f"Error: {str(e)}\nPlease try again or type 'restart' to start over."}]
@@ -103,40 +139,32 @@ async def handle_message(session_id: str, text: str, files: list[dict] = None) -
     return [{"type": "message", "text": WELCOME_MESSAGE}]
 
 
+# Aliases that map user text → workflow number (in addition to "1".."6")
+_IDLE_ALIASES = {
+    "source finder": "1", "source": "1",
+    "video audio": "2", "combiner": "2", "combine": "2",
+    "video changer": "3", "video": "3",
+    "script changer": "4", "script": "4",
+    "image audio": "5", "slideshow": "5", "image + audio": "5",
+    "script to voice": "6", "voice": "6", "tts": "6",
+}
+
+
 def _handle_idle(session_id: str, text: str) -> list[dict]:
     text_lower = text.strip().lower()
 
-    if text_lower in ["1", "source finder", "source"]:
-        set_workflow(session_id, "wf1")
-        set_state(session_id, State.WF1_AWAITING_LINK)
-        return [{"type": "message", "text": "Please send a YouTube video link."}]
-
-    elif text_lower in ["2", "video audio", "combiner", "combine"]:
-        set_workflow(session_id, "wf2")
-        set_state(session_id, State.WF2_AWAITING_FILES)
-        return [{"type": "message", "text": "Please send:\n1. A video file\n2. An audio file"}]
-
-    elif text_lower in ["3", "video changer", "video"]:
-        set_workflow(session_id, "wf3")
-        set_state(session_id, State.WF3_AWAITING_VIDEO)
-        return [{"type": "message", "text": "Please send a video file."}]
-
-    elif text_lower in ["4", "script changer", "script"]:
-        set_workflow(session_id, "wf4")
-        set_state(session_id, State.WF4_AWAITING_SCRIPT)
-        return [{"type": "message", "text": "Please send your script file."}]
-
-    elif text_lower in ["5", "image audio", "slideshow", "image + audio"]:
-        set_workflow(session_id, "wf5")
-        set_state(session_id, State.WF5_AWAITING_FILES)
-        return [{"type": "message", "text": WORKFLOW_INTROS["5"]["msg"]}]
-
-    elif text_lower in ["restart", "reset", "start"]:
+    if text_lower in ("restart", "reset", "start"):
         reset_session(session_id)
         return [{"type": "message", "text": WELCOME_MESSAGE}]
 
-    else:
+    wf_num = text_lower if text_lower in WORKFLOW_INIT else _IDLE_ALIASES.get(text_lower)
+    if not wf_num:
         return [{"type": "message", "text": WELCOME_MESSAGE}]
+
+    wf_key, initial_state = WORKFLOW_INIT[wf_num]
+    set_workflow(session_id, wf_key)
+    set_state(session_id, initial_state)
+    return [{"type": "message", "text": WORKFLOW_INTROS[wf_num]["msg"]}]
 
 
 # ─── Workflow 1: Source Finder + Script Generator ───
@@ -159,6 +187,8 @@ async def _handle_wf1(session_id: str, state: State, text: str, files: list) -> 
         session_dir = str(get_session_dir(session_id))
         metadata = extract_metadata(text.strip(), session_dir)
         set_data(session_id, "metadata", metadata)
+        # Use video title as the "original file name" source for outputs
+        set_data(session_id, "source_name", metadata.get("title", "script"))
 
         # Search for sources
         set_state(session_id, State.WF1_SEARCHING_SOURCES)
@@ -197,8 +227,7 @@ async def _handle_wf1(session_id: str, state: State, text: str, files: list) -> 
         user_input = text.strip()
 
         # Try to extract a number for word count
-        import re as _re
-        numbers = _re.findall(r'\d+', user_input)
+        numbers = re.findall(r'\d+', user_input)
         target_words = 3000  # default
         for n in numbers:
             n_int = int(n)
@@ -207,7 +236,7 @@ async def _handle_wf1(session_id: str, state: State, text: str, files: list) -> 
                 break
 
         # The rest is the prompt/style instruction
-        user_prompt = _re.sub(r'\d{3,}', '', user_input).strip()
+        user_prompt = re.sub(r'\d{3,}', '', user_input).strip()
         if not user_prompt:
             user_prompt = "Write a detailed, engaging script"
 
@@ -345,8 +374,10 @@ async def _finish_wf1_script(session_id: str) -> list[dict]:
     full_script = data.get("full_script", "")
     words_generated = data.get("words_generated", 0)
 
-    # Save full script
-    output_path = str(get_session_dir(session_id) / "script.txt")
+    # Save full script using the source video's title as filename
+    stem = _safe_stem(data.get("source_name"), fallback="script")
+    filename = f"{stem}.txt"
+    output_path = str(get_session_dir(session_id) / filename)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(full_script.strip())
     set_data(session_id, "script_path", output_path)
@@ -359,7 +390,7 @@ async def _finish_wf1_script(session_id: str) -> list[dict]:
     set_state(session_id, State.WF1_COMPLETE)
     return [
         {"type": "message", "text": f"Script complete! Total words: {words_generated}"},
-        {"type": "file_ready", "filename": "script.txt", "drive_url": drive_result["url"]},
+        {"type": "file_ready", "filename": filename, "drive_url": drive_result["url"]},
         {"type": "prompt", "text": "Do you want to process another video?", "options": ["yes", "no"]},
     ]
 
@@ -374,6 +405,7 @@ async def _handle_wf2(session_id: str, state: State, text: str, files: list) -> 
             ext = f["filename"].rsplit(".", 1)[-1].lower() if "." in f["filename"] else ""
             if ext in ["mp4", "mov", "avi", "mkv", "webm"] and "video_path" not in data:
                 set_data(session_id, "video_path", f["path"])
+                set_data(session_id, "source_name", f["filename"])
             elif ext in ["mp3", "wav", "aac", "flac", "ogg", "m4a"] and "audio_path" not in data:
                 set_data(session_id, "audio_path", f["path"])
 
@@ -382,7 +414,12 @@ async def _handle_wf2(session_id: str, state: State, text: str, files: list) -> 
             set_state(session_id, State.WF2_PROCESSING)
 
             from execution.ffmpeg_combine import combine_video_audio
-            output_path = combine_video_audio(data["video_path"], data["audio_path"])
+            from execution.file_handler import get_session_dir
+
+            stem = _safe_stem(data.get("source_name"), fallback="combined")
+            filename = f"{stem}.mp4"
+            output_path = str(get_session_dir(session_id) / filename)
+            combine_video_audio(data["video_path"], data["audio_path"], output_path)
             set_data(session_id, "output_path", output_path)
 
             set_state(session_id, State.WF2_UPLOADING)
@@ -392,7 +429,7 @@ async def _handle_wf2(session_id: str, state: State, text: str, files: list) -> 
             set_state(session_id, State.WF2_COMPLETE)
             return [
                 {"type": "status", "text": "We are combining your files, please wait a moment..."},
-                {"type": "file_ready", "filename": "combined_video.mp4", "drive_url": drive_result["url"]},
+                {"type": "file_ready", "filename": filename, "drive_url": drive_result["url"]},
                 {"type": "message", "text": "Your video and audio have been combined successfully!"},
                 {"type": "prompt", "text": "Do you want to process another file?", "options": ["yes", "no"]},
             ]
@@ -418,6 +455,7 @@ async def _handle_wf3(session_id: str, state: State, text: str, files: list) -> 
             ext = f["filename"].rsplit(".", 1)[-1].lower() if "." in f["filename"] else ""
             if ext in ["mp4", "mov", "avi", "mkv", "webm"]:
                 set_data(session_id, "video_path", f["path"])
+                set_data(session_id, "source_name", f["filename"])
                 set_state(session_id, State.WF3_AWAITING_PROMPT)
                 return [{"type": "message", "text": "Video received! Please describe what kind of script you want for this video.\n\n(e.g. \"write a documentary narration\", \"create a news report\", \"storytelling style\")"}]
         return [{"type": "message", "text": "Please send a video file."}]
@@ -434,8 +472,7 @@ async def _handle_wf3(session_id: str, state: State, text: str, files: list) -> 
         return [{"type": "message", "text": f"Language set to: {language}\n\nHow many words do you want? (e.g. 3000, 5000, 7000)"}]
 
     elif state == State.WF3_ASK_WORDCOUNT:
-        import re as _re
-        numbers = _re.findall(r'\d+', text)
+        numbers = re.findall(r'\d+', text)
         target_words = 3000
         for n in numbers:
             n_int = int(n)
@@ -576,7 +613,9 @@ async def _finish_wf3_script(session_id: str) -> list[dict]:
     full_script = data.get("full_script", "")
     words_generated = data.get("words_generated", 0)
 
-    output_path = str(get_session_dir(session_id) / "video_script.txt")
+    stem = _safe_stem(data.get("source_name"), fallback="video_script")
+    filename = f"{stem}.txt"
+    output_path = str(get_session_dir(session_id) / filename)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(full_script.strip())
     set_data(session_id, "script_path", output_path)
@@ -588,7 +627,7 @@ async def _finish_wf3_script(session_id: str) -> list[dict]:
     set_state(session_id, State.WF3_COMPLETE)
     return [
         {"type": "message", "text": f"Script complete! Total words: {words_generated}"},
-        {"type": "file_ready", "filename": "video_script.txt", "drive_url": drive_result["url"]},
+        {"type": "file_ready", "filename": filename, "drive_url": drive_result["url"]},
         {"type": "prompt", "text": "Do you want to process another video?", "options": ["yes", "no"]},
     ]
 
@@ -601,6 +640,7 @@ async def _handle_wf4(session_id: str, state: State, text: str, files: list) -> 
             ext = f["filename"].rsplit(".", 1)[-1].lower() if "." in f["filename"] else ""
             if ext in ["txt", "docx", "doc", "md"]:
                 set_data(session_id, "script_path", f["path"])
+                set_data(session_id, "source_name", f["filename"])
                 set_state(session_id, State.WF4_AWAITING_INSTRUCTIONS)
                 return [{"type": "message", "text": "Script received! What changes do you want to make?"}]
         return [{"type": "message", "text": "Please send a script file (.txt, .docx, .md)."}]
@@ -617,8 +657,7 @@ async def _handle_wf4(session_id: str, state: State, text: str, files: list) -> 
         return [{"type": "message", "text": f"Language set to: {language}\n\nHow many words do you want? (e.g. 3000, 5000, 7000)"}]
 
     elif state == State.WF4_ASK_WORDCOUNT:
-        import re as _re
-        numbers = _re.findall(r'\d+', text)
+        numbers = re.findall(r'\d+', text)
         target_words = 3000
         for n in numbers:
             n_int = int(n)
@@ -680,7 +719,8 @@ async def _handle_wf4(session_id: str, state: State, text: str, files: list) -> 
         scenes = split_into_scenes(data["modified_script_path"], output_path=scenes_path)
         set_data(session_id, "scenes", scenes)
 
-        # Generate I2V and T2V prompts
+        # Generate I2V and T2V prompts, named after the original script
+        stem = _safe_stem(data.get("source_name"), fallback="script")
         result = generate_video_prompts(
             scenes=scenes,
             style=data.get("img_style", ""),
@@ -688,11 +728,14 @@ async def _handle_wf4(session_id: str, state: State, text: str, files: list) -> 
             background=data.get("img_background", ""),
             consistency=data.get("img_consistency", True),
             output_dir=str(session_dir / "video_prompts"),
+            name_prefix=stem,
         )
 
         # Upload both files to Drive
         i2v_drive = upload_to_drive(result["i2v_path"])
         t2v_drive = upload_to_drive(result["t2v_path"])
+        i2v_name = Path(result["i2v_path"]).name
+        t2v_name = Path(result["t2v_path"]).name
 
         set_state(session_id, State.WF4_COMPLETE)
         total_i2v = result.get("i2v_total_variations", result.get("i2v_scene_count", len(scenes)))
@@ -706,8 +749,8 @@ async def _handle_wf4(session_id: str, state: State, text: str, files: list) -> 
                 f"**Background:** {data.get('img_background', '')}\n"
                 f"**Consistency:** {'Yes' if consistency else 'No'}"
             )},
-            {"type": "file_ready", "filename": "image_to_video_prompts.txt", "drive_url": i2v_drive["url"]},
-            {"type": "file_ready", "filename": "text_to_video_prompts.txt", "drive_url": t2v_drive["url"]},
+            {"type": "file_ready", "filename": i2v_name, "drive_url": i2v_drive["url"]},
+            {"type": "file_ready", "filename": t2v_name, "drive_url": t2v_drive["url"]},
             {"type": "message", "text": "Both prompt files are ready! Each paragraph has 9 prompt variations.\n- **image_to_video_prompts.txt** — use with Runway Gen-3, Kling, Luma, Pika\n- **text_to_video_prompts.txt** — use with Sora, Veo, Kling, Runway"},
             {"type": "prompt", "text": "Do you want to process another script?", "options": ["yes", "no"]},
         ]
@@ -824,7 +867,9 @@ async def _finish_wf4_script(session_id: str) -> list[dict]:
     full_script = data.get("full_script", "")
     words_generated = data.get("words_generated", 0)
 
-    output_path = str(get_session_dir(session_id) / "modified_script.txt")
+    stem = _safe_stem(data.get("source_name"), fallback="modified_script")
+    filename = f"{stem}.txt"
+    output_path = str(get_session_dir(session_id) / filename)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(full_script.strip())
     set_data(session_id, "modified_script_path", output_path)
@@ -836,7 +881,7 @@ async def _finish_wf4_script(session_id: str) -> list[dict]:
     set_state(session_id, State.WF4_ASK_STYLE)
     return [
         {"type": "message", "text": f"Script modified! Total words: {words_generated}"},
-        {"type": "file_ready", "filename": "modified_script.txt", "drive_url": drive_result["url"]},
+        {"type": "file_ready", "filename": filename, "drive_url": drive_result["url"]},
         {"type": "message", "text": "Now let's create video prompts for your script.\n\nFirst, describe your **image generation style**.\n\n(e.g. \"3D Pixar style\", \"Disney animation\", \"photorealistic cinematic\", \"anime\", \"watercolor illustration\", \"cyberpunk\")"},
     ]
 
@@ -852,17 +897,21 @@ async def _handle_wf5(session_id: str, state: State, text: str, files: list) -> 
 
         audio_path = data.get("audio_path")
         image_paths = list(data.get("image_paths", []))
+        audio_name = data.get("source_name")
 
         # Accept any newly uploaded files
         for f in files:
             ext = f["filename"].rsplit(".", 1)[-1].lower() if "." in f["filename"] else ""
             if ext in audio_exts and not audio_path:
                 audio_path = f["path"]
+                audio_name = f["filename"]
             elif ext in image_exts:
                 image_paths.append(f["path"])
 
         set_data(session_id, "audio_path", audio_path)
         set_data(session_id, "image_paths", image_paths)
+        if audio_name:
+            set_data(session_id, "source_name", audio_name)
 
         # If we don't yet have both, tell the user what's missing
         if not audio_path or len(image_paths) < 1:
@@ -910,7 +959,9 @@ async def _handle_wf5(session_id: str, state: State, text: str, files: list) -> 
             ),
         }
 
-        output_path = str(get_session_dir(session_id) / "slideshow.mp4")
+        stem = _safe_stem(get_data(session_id).get("source_name"), fallback="slideshow")
+        filename = f"{stem}.mp4"
+        output_path = str(get_session_dir(session_id) / filename)
         result = create_slideshow(audio_path, image_paths, output_path)
 
         set_state(session_id, State.WF5_UPLOADING)
@@ -920,11 +971,133 @@ async def _handle_wf5(session_id: str, state: State, text: str, files: list) -> 
         return [
             status_msg,
             {"type": "message", "text": f"Slideshow created! Duration: {result['duration']:.1f}s, {result['image_count']} images at {result['per_image_duration']:.1f}s each."},
-            {"type": "file_ready", "filename": "slideshow.mp4", "drive_url": drive_result["url"]},
+            {"type": "file_ready", "filename": filename, "drive_url": drive_result["url"]},
             {"type": "prompt", "text": "Do you want to create another slideshow?", "options": ["yes", "no"]},
         ]
 
     elif state == State.WF5_COMPLETE:
+        return _handle_restart(session_id, text)
+
+    return [{"type": "message", "text": "Something went wrong. Type 'restart' to start over."}]
+
+
+# ─── Workflow 6: Script to Voice ────────────────────────────────────────────
+
+async def _handle_wf6(session_id: str, state: State, text: str, files: list) -> list[dict]:
+    from execution.tts_generator import (
+        generate_speech, format_voice_menu, resolve_voice, extract_text_pages
+    )
+    from execution.config import TMP_DIR
+
+    script_exts = {"docx", "txt", "doc"}
+
+    # ── Step 1: Await script file upload ────────────────────────────────────
+    if state == State.WF6_AWAITING_SCRIPT:
+        script_path = None
+        script_filename = None
+        for f in files:
+            ext = f["filename"].rsplit(".", 1)[-1].lower() if "." in f["filename"] else ""
+            if ext in script_exts:
+                script_path = f["path"]
+                script_filename = f["filename"]
+                break
+
+        if not script_path:
+            return [{"type": "message", "text": "Please upload a script file (.docx or .txt) to get started."}]
+
+        set_data(session_id, "script_path", script_path)
+        set_data(session_id, "script_filename", script_filename)
+
+        # Count pages for info
+        try:
+            pages = extract_text_pages(script_path)
+            page_count = len(pages)
+        except Exception:
+            page_count = "?"
+
+        set_state(session_id, State.WF6_ASK_VOICE)
+        return [
+            {"type": "message", "text": f"Script received! Detected **{page_count}** page(s).\n\n{format_voice_menu()}"},
+        ]
+
+    # ── Step 2: Choose voice ─────────────────────────────────────────────────
+    elif state == State.WF6_ASK_VOICE:
+        voice_name = resolve_voice(text.strip())
+        if not voice_name:
+            return [{"type": "message", "text": f"Voice not recognised. Please enter a number (1-15) or a voice name.\n\n{format_voice_menu()}"}]
+
+        set_data(session_id, "voice_name", voice_name)
+        set_state(session_id, State.WF6_ASK_STYLE)
+        return [{"type": "message", "text": (
+            f"Voice set to **{voice_name}**.\n\n"
+            "Now describe the **speaking style** for this script.\n\n"
+            "Examples:\n"
+            "- *Read this as a dramatic movie trailer narrator*\n"
+            "- *Calm and professional news anchor tone*\n"
+            "- *Warm storytelling voice for children*\n"
+            "- *Energetic and motivational*\n\n"
+            "Or type **skip** to use the default voice style."
+        )}]
+
+    # ── Step 3: Style instruction → process ─────────────────────────────────
+    elif state == State.WF6_ASK_STYLE:
+        style = "" if text.strip().lower() in ["skip", "none", "-"] else text.strip()
+        set_data(session_id, "style_instruction", style)
+
+        data = get_data(session_id)
+        script_path = data.get("script_path")
+        voice_name  = data.get("voice_name")
+
+        try:
+            pages = extract_text_pages(script_path)
+            page_count = len(pages)
+        except Exception:
+            page_count = "?"
+
+        set_state(session_id, State.WF6_PROCESSING)
+
+        style_display = f'"{style}"' if style else "default"
+        yield_status = {
+            "type": "status",
+            "text": (
+                f"Generating audio…\n"
+                f"- Voice: {voice_name}\n"
+                f"- Style: {style_display}\n"
+                f"- Pages: {page_count}\n"
+                f"- Running {page_count} parallel TTS jobs then combining into one MP3"
+            ),
+        }
+
+        # Save directly to .tmp with the original script's base filename
+        # (e.g. "my_script.docx" -> ".tmp/my_script.mp3")
+        original_filename = data.get("script_filename") or "script.mp3"
+        base_stem = Path(original_filename).stem or "script"
+        output_path = str(TMP_DIR / f"{base_stem}.mp3")
+
+        result = generate_speech(
+            script_path=script_path,
+            voice_name=voice_name,
+            style_instruction=style,
+            output_path=output_path,
+        )
+
+        set_state(session_id, State.WF6_COMPLETE)
+        saved_filename = Path(result["audio_path"]).name
+        return [
+            yield_status,
+            {"type": "message", "text": (
+                f"Audio generated successfully!\n\n"
+                f"- **Voice:** {result['voice']}\n"
+                f"- **Pages processed:** {result['page_count']}\n"
+                f"- **Style:** {style_display}\n"
+                f"- **Saved as:** `{saved_filename}`\n"
+                f"- **Location:** `{result['audio_path']}`"
+            )},
+            {"type": "file_ready", "filename": saved_filename, "local_path": result["audio_path"]},
+            {"type": "prompt", "text": "Do you want to convert another script?", "options": ["yes", "no"]},
+        ]
+
+    elif state == State.WF6_COMPLETE:
         return _handle_restart(session_id, text)
 
     return [{"type": "message", "text": "Something went wrong. Type 'restart' to start over."}]

@@ -54,7 +54,7 @@ async def websocket_endpoint(ws: WebSocket, workflow: str = Query(default=None))
     await ws.send_json({"type": "session", "session_id": session_id})
 
     # Auto-start the workflow if specified
-    if workflow and workflow in ["1", "2", "3", "4", "5"]:
+    if workflow and workflow in ["1", "2", "3", "4", "5", "6"]:
         welcome_msgs = get_workflow_welcome(session_id, workflow)
         for msg in welcome_msgs:
             await ws.send_json(msg)
