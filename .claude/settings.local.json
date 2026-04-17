@@ -49,7 +49,13 @@
       "Bash(ls execution/*.py)",
       "Bash(python -c \"from execution.workflow_handlers import handle_message, get_workflow_welcome; from execution.tts_generator import generate_speech, format_voice_menu, resolve_voice; from execution.state_manager import State; print\\('OK'\\)\")",
       "Bash(python -c \"from execution.workflow_handlers import handle_message, _safe_stem; from execution.video_prompt_gen import generate_video_prompts; from execution.ffmpeg_combine import combine_video_audio; print\\(_safe_stem\\('My Video: Part 1 / Final.mp4'\\)\\); print\\(_safe_stem\\(''\\)\\); print\\(_safe_stem\\(None, 'fallback'\\)\\)\")",
-      "Bash(python -c \"from execution.workflow_handlers import handle_message, get_workflow_welcome, _safe_stem; from execution.video_prompt_gen import generate_video_prompts; from execution.ffmpeg_combine import combine_video_audio; from execution.tts_generator import generate_speech; print\\('All imports OK'\\)\")"
+      "Bash(python -c \"from execution.workflow_handlers import handle_message, get_workflow_welcome, _safe_stem; from execution.video_prompt_gen import generate_video_prompts; from execution.ffmpeg_combine import combine_video_audio; from execution.tts_generator import generate_speech; print\\('All imports OK'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python app.py)",
+      "Bash(timeout 3)",
+      "Bash(python -c \"from execution.video_prompt_gen import generate_video_prompts; print\\('OK'\\)\")",
+      "Bash(python -c \"from execution.workflow_handlers import handle_message; from execution.state_manager import State; print\\('OK'\\)\")",
+      "Bash(python -c \"from execution.workflow_handlers import handle_message; from execution.video_prompt_gen import generate_video_prompts; from execution.state_manager import State; print\\('OK'\\)\")",
+      "Bash(python -c \"from execution.video_prompt_gen import generate_video_prompts; from execution.workflow_handlers import handle_message; print\\('OK'\\)\")"
     ]
   }
 }
