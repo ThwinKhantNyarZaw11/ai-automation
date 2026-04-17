@@ -1,10 +1,20 @@
 """
-Generate image-to-video (I2V) and text-to-video (T2V) prompts from script scenes.
-Takes user's style/character/background preferences and creates two JSON prompt files.
-Usage: python -m execution.video_prompt_gen --scenes_json <path> --style ... --character ... --background ...
+Generate video prompts from script scenes — single plain-text file.
+
+Output structure:
+  PART 1 — Character Design Sheets
+    For each character: front view, side view, back view prompts
+    (full body 9:16 + upper 3/4 body), all on white background.
+
+  PART 2 — Scene Prompt Table
+    For each scene: side-by-side Text-to-Image vs Image-to-Video prompts
+    so the user can compare and paste into Grok / Runway / Kling etc.
+
+Usage: python -m execution.video_prompt_gen --scenes_json <path> --style ...
 """
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from execution.gemini_generate import generate_text
@@ -14,130 +24,144 @@ from execution.config import TMP_DIR
 PROMPTS_PER_SCENE = 9
 
 
-# ── I2V Prompt System Prompt ──
-I2V_SYSTEM_PROMPT = f"""You are an expert at creating Image-to-Video (I2V) prompts for AI video generation tools like Runway Gen-3, Kling, Luma Dream Machine, and Pika.
+# ── System prompts ────────────────────────────────────────────────────────────
 
-You will receive:
-1. User's STYLE preference
-2. User's CHARACTER DESIGN preference
-3. User's BACKGROUND preference
-4. Whether characters should be CONSISTENT across scenes
-5. A scene (paragraph) from a script
+CHARACTER_SHEET_SYSTEM = """You are an expert character design prompt writer for AI image generation (Grok, Midjourney, DALL-E, Flux).
 
-Your job: generate EXACTLY {PROMPTS_PER_SCENE} DIFFERENT I2V prompt variations for this single paragraph. Each variation should describe:
-- The STATIC IMAGE that would be the starting frame
-- The MOTION/CAMERA movement to animate from that frame
-- Duration hints (usually 3-5 seconds)
-- Camera terminology (dolly, pan, zoom, push in, orbit, etc.)
+You will receive a script excerpt and a style preference. Your job:
 
-HOW TO CREATE {PROMPTS_PER_SCENE} DISTINCT VARIATIONS:
-- Vary the CAMERA ANGLE (low-angle, high-angle, bird's-eye, Dutch tilt, eye-level, over-the-shoulder, etc.)
-- Vary the SHOT TYPE (extreme close-up, close-up, medium, wide, extreme wide)
-- Vary the CHARACTER PERSPECTIVE or POINT OF VIEW (the main character's POV, a bystander's POV, an antagonist's POV, a child's POV, an animal's POV, a drone/overhead POV, etc.)
-- Vary the FOCAL SUBJECT (focus on face, hands, environment, reaction, foreground object, background detail)
-- Vary the CAMERA MOTION (dolly in, pull back, orbit, crane up, handheld shake, locked tripod, whip pan)
-- Vary the TIMING MOMENT within the paragraph (opening beat, middle action, final reaction)
+1. Identify ALL named or distinct characters in the script.
+2. For EACH character, write 6 image-generation prompts:
+   a) FRONT VIEW — Full body, 9:16 portrait orientation
+   b) SIDE VIEW  — Full body, 9:16 portrait orientation
+   c) BACK VIEW  — Full body, 9:16 portrait orientation
+   d) FRONT VIEW — Upper 3/4 body (head to mid-thigh)
+   e) SIDE VIEW  — Upper 3/4 body (head to mid-thigh)
+   f) BACK VIEW  — Upper 3/4 body (head to mid-thigh)
 
-If the paragraph is SHORT or has little obvious action, you MUST still produce {PROMPTS_PER_SCENE} variations by shifting POV / camera angle / focal subject as described above — do NOT invent new plot content, just show the same beat through different lenses.
+RULES:
+- Every prompt MUST start with the character's NAME so the AI knows exactly who it is generating (e.g. "Prince Min Sit, front view, full body...")
+- Every prompt MUST specify: white background, character design sheet style
+- Every prompt MUST include the user's art style
+- Describe the character in FULL DETAIL: age, gender, ethnicity, body type, height, hair color/style, eye color, clothing (top, bottom, shoes, accessories), facial features, distinctive traits
+- Keep descriptions IDENTICAL across all 6 views of the same character (consistency of appearance, clothes, accessories)
+- Each prompt should be self-contained and ready to paste into an AI image tool
+- Keep each prompt under 150 words
+- Do NOT add any extra commentary — just the prompts
 
-CRITICAL RULES:
-- Include the user's style, character design, and background EXACTLY in every variation
-- If consistency = yes, use IDENTICAL character descriptions across all variations
-- If consistency = no, allow character variation
-- Each variation must be clearly DIFFERENT from the others
-- Keep each prompt focused and under 150 words
+OUTPUT FORMAT (plain text, exactly like this):
 
-Output ONLY valid JSON in this exact shape:
-{{
-  "scene": <number>,
-  "variations": [
-    {{
-      "variation": 1,
-      "pov": "<whose perspective / camera angle>",
-      "shot_type": "<e.g. close-up, wide shot>",
-      "starting_frame": "<detailed description of the initial image>",
-      "motion": "<description of camera movement and subject animation>",
-      "duration": "<e.g. 4 seconds>",
-      "full_prompt": "<combined prompt ready to paste into I2V tools>"
-    }},
-    ... (exactly {PROMPTS_PER_SCENE} total variations)
-  ]
-}}"""
+CHARACTER 1: [Full Name]
 
+  Front View (Full Body):
+  [Full Name], front view, full body, 9:16, [detailed prompt...], white background, character design sheet
 
-# ── T2V Prompt System Prompt ──
-T2V_SYSTEM_PROMPT = f"""You are an expert at creating Text-to-Video (T2V) prompts for AI video generation tools like Sora, Veo, Kling, and Runway.
+  Side View (Full Body):
+  [Full Name], side view, full body, 9:16, [detailed prompt...], white background, character design sheet
 
-You will receive:
-1. User's STYLE preference
-2. User's CHARACTER DESIGN preference
-3. User's BACKGROUND preference
-4. Whether characters should be CONSISTENT across scenes
-5. A scene (paragraph) from a script
+  Back View (Full Body):
+  [Full Name], back view, full body, 9:16, [detailed prompt...], white background, character design sheet
 
-Your job: generate EXACTLY {PROMPTS_PER_SCENE} DIFFERENT T2V prompt variations for this single paragraph. Each variation describes the entire video clip from start to finish.
+  Front View (Upper 3/4):
+  [Full Name], front view, upper 3/4 body, [detailed prompt...], white background, character design sheet
 
-HOW TO CREATE {PROMPTS_PER_SCENE} DISTINCT VARIATIONS:
-- Vary the CAMERA ANGLE (low-angle, high-angle, bird's-eye, Dutch tilt, eye-level, over-the-shoulder, etc.)
-- Vary the SHOT TYPE (extreme close-up, close-up, medium, wide, extreme wide)
-- Vary the CHARACTER PERSPECTIVE or POINT OF VIEW (main character's POV, bystander's POV, antagonist's POV, child's POV, animal's POV, overhead drone POV, etc.)
-- Vary the FOCAL SUBJECT (face, hands, environment, reaction shot, foreground, background detail)
-- Vary the CAMERA MOTION (dolly in, pull back, orbit, crane up, handheld, locked, whip pan)
-- Vary the TIMING MOMENT within the paragraph (opening beat, middle, closing reaction)
+  Side View (Upper 3/4):
+  [Full Name], side view, upper 3/4 body, [detailed prompt...], white background, character design sheet
 
-If the paragraph is SHORT or has little obvious action, you MUST still produce {PROMPTS_PER_SCENE} variations by shifting POV / camera angle / focal subject — do NOT invent new plot content, just reframe the same beat.
+  Back View (Upper 3/4):
+  [Full Name], back view, upper 3/4 body, [detailed prompt...], white background, character design sheet
 
-CRITICAL RULES:
-- Include the user's style, character design, and background EXACTLY in every variation
-- If consistency = yes, use IDENTICAL character descriptions across all variations
-- If consistency = no, allow character variation
-- Each variation must be clearly DIFFERENT from the others
-- Include cinematic terminology: shot type, lighting, mood, atmosphere
-- Keep each prompt focused and under 200 words
-
-Output ONLY valid JSON in this exact shape:
-{{
-  "scene": <number>,
-  "variations": [
-    {{
-      "variation": 1,
-      "pov": "<whose perspective / camera angle>",
-      "shot_type": "<e.g. medium shot, wide shot, close-up>",
-      "style": "<art style>",
-      "action": "<what happens in the scene>",
-      "camera": "<camera movement>",
-      "lighting": "<lighting description>",
-      "full_prompt": "<combined prompt ready to paste into T2V tools>"
-    }},
-    ... (exactly {PROMPTS_PER_SCENE} total variations)
-  ]
-}}"""
+CHARACTER 2: [Full Name]
+  ... (same format)
+"""
 
 
-def _parse_json_response(response: str, fallback: dict) -> dict:
-    """Parse JSON from Gemini response, handling markdown code blocks."""
-    try:
-        json_str = response.strip()
-        if "```" in json_str:
-            json_str = json_str.split("```")[1]
-            if json_str.startswith("json"):
-                json_str = json_str[4:]
-            json_str = json_str.strip()
-        return json.loads(json_str)
-    except json.JSONDecodeError:
-        return fallback
+SCENE_PROMPT_SYSTEM = """You are an expert at creating prompts for AI video generation tools.
 
+You will receive a scene (paragraph) from a script plus the user's style/character/background preferences.
+
+Your job: generate THREE things for this scene:
+
+1. CHARACTERS IN THIS SCENE — List every character who appears or is mentioned in this scene by their full name.
+
+2. TEXT-TO-IMAGE (T2I) PROMPT — A detailed prompt to generate a STATIC IMAGE of this scene.
+   This will be used in Grok, Midjourney, DALL-E, or Flux.
+   Include: scene composition, character poses, expressions, environment, lighting, camera angle, art style.
+   IMPORTANT: Mention each character BY NAME in the prompt so the AI knows exactly who is in the scene.
+   Keep under 200 words.
+
+3. IMAGE-TO-VIDEO (I2V) PROMPT — A prompt to ANIMATE the image from above into a short video.
+   This will be used in Runway Gen-3, Kling, Luma, or Pika.
+   Include: what moves, camera motion (dolly, pan, zoom, orbit, etc.), character action, duration (3-5s).
+   IMPORTANT: Mention each character BY NAME so the AI knows who is moving/acting.
+   Keep under 150 words.
+
+RULES:
+- Include the user's style, character design, and background in both prompts
+- If consistency = yes, use IDENTICAL character descriptions, clothes, and visual details across all scenes
+- Refer to characters by their FULL NAMES in every prompt
+- Make the T2I prompt describe the scene as a single still frame
+- Make the I2V prompt describe how that frame comes alive with motion
+- Output ONLY in the format below, no extra commentary
+
+OUTPUT FORMAT (plain text, exactly like this):
+
+Characters: [Name1], [Name2], [Name3]
+
+Text-to-Image:
+[prompt]
+
+Image-to-Video:
+[prompt]
+"""
+
+
+# ── Core generation ───────────────────────────────────────────────────────────
 
 def _build_user_context(style: str, character: str, background: str,
                         consistency: bool) -> str:
     """Format user preferences into a context block."""
-    lines = [
+    return "\n".join([
         f"STYLE: {style}",
         f"CHARACTER DESIGN: {character}",
         f"BACKGROUND: {background}",
-        f"CHARACTER CONSISTENCY: {'YES - Keep characters IDENTICAL across all scenes' if consistency else 'NO - Characters can vary per scene'}",
-    ]
-    return "\n".join(lines)
+        f"FULL CONSISTENCY: {'YES - Keep characters, clothes, background, art style, and all visual details IDENTICAL across every scene' if consistency else 'NO - Allow variation between scenes'}",
+    ])
+
+
+def _generate_character_sheets(script_text: str, style: str) -> str:
+    """Generate character design sheet prompts from the full script."""
+    # Use a generous excerpt so Gemini sees all characters
+    excerpt = script_text[:5000]
+    prompt = f"""Art style: {style}
+
+Script:
+\"\"\"
+{excerpt}
+\"\"\"
+
+Identify all characters and generate the 6-view character design sheet prompts for each one."""
+
+    return generate_text(prompt, system_prompt=CHARACTER_SHEET_SYSTEM)
+
+
+def _generate_scene_prompt(scene_num: int, scene_text: str,
+                           user_context: str, total_scenes: int) -> tuple[int, str]:
+    """Generate T2I + I2V prompt pair for one scene. Returns (scene_num, text)."""
+    prompt = f"""{user_context}
+
+---
+
+SCENE {scene_num}:
+{scene_text}
+
+---
+
+Generate the Text-to-Image and Image-to-Video prompts for this scene."""
+
+    response = generate_text(prompt, system_prompt=SCENE_PROMPT_SYSTEM)
+    print(f"[VideoPromptGen] Scene {scene_num}/{total_scenes} done")
+    return scene_num, response.strip()
 
 
 def generate_video_prompts(
@@ -148,155 +172,175 @@ def generate_video_prompts(
     consistency: bool,
     output_dir: str = None,
     name_prefix: str = None,
+    script_text: str = "",
 ) -> dict:
     """
-    Generate I2V and T2V prompts for all scenes.
-    Returns dict with paths to the two output files.
+    Generate a single prompt file containing:
+      Part 1: Character design sheets (front/side/back views)
+      Part 2: Scene-by-scene T2I vs I2V prompt table
 
-    If `name_prefix` is provided, outputs are named
-    `{prefix}_image_to_video_prompts.txt` and `{prefix}_text_to_video_prompts.txt`.
+    Returns dict with 'prompt_path', 'scene_count', 'character_section_length'.
     """
     output_dir = Path(output_dir) if output_dir else TMP_DIR / "video_prompts"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     user_context = _build_user_context(style, character, background, consistency)
+    total_scenes = len(scenes)
 
-    i2v_prompts = []
-    t2v_prompts = []
+    # ── Fire character sheet + all scene prompts in parallel ──────────────
+    scene_results = {}  # scene_num -> text
 
-    for scene in scenes:
-        scene_num = scene.get("scene_number", 0)
-        scene_text = scene.get("text", "")
+    with ThreadPoolExecutor(max_workers=min(total_scenes + 1, 8)) as executor:
+        # Submit character sheet generation
+        char_future = executor.submit(
+            _generate_character_sheets, script_text, style
+        )
 
-        # ── Generate I2V prompts (9 variations) ──
-        i2v_input = f"""{user_context}
+        # Submit all scene prompts
+        scene_futures = {
+            executor.submit(
+                _generate_scene_prompt,
+                scene.get("scene_number", i + 1),
+                scene.get("text", ""),
+                user_context,
+                total_scenes,
+            ): scene.get("scene_number", i + 1)
+            for i, scene in enumerate(scenes)
+        }
 
----
+        # Collect character sheet
+        character_section = char_future.result()
+        print(f"[VideoPromptGen] Character sheets done")
 
-SCENE {scene_num}:
-{scene_text}
+        # Collect scene results
+        for future in as_completed(scene_futures):
+            scene_num = scene_futures[future]
+            scene_results[scene_num] = future.result()[1]
 
----
+    # ── Assemble the final document ──────────────────────────────────────
+    separator = "=" * 80
+    thin_sep = "-" * 80
 
-Generate exactly {PROMPTS_PER_SCENE} I2V prompt variations for this paragraph. Output only JSON."""
+    lines = []
+    lines.append(separator)
+    lines.append("  VIDEO PROMPT FILE")
+    lines.append(f"  Style: {style}")
+    lines.append(f"  Scenes: {total_scenes}")
+    lines.append(f"  Consistency: {'Yes' if consistency else 'No'}")
+    lines.append(separator)
+    lines.append("")
 
-        i2v_response = generate_text(i2v_input, system_prompt=I2V_SYSTEM_PROMPT)
-        i2v_data = _parse_json_response(i2v_response, {
-            "scene": scene_num,
-            "variations": [
-                {
-                    "variation": 1,
-                    "pov": "main character eye-level",
-                    "shot_type": "medium shot",
-                    "starting_frame": scene_text[:200],
-                    "motion": "slow camera push in",
-                    "duration": "4 seconds",
-                    "full_prompt": i2v_response.strip(),
-                }
-            ],
-        })
-        i2v_data["scene"] = scene_num
-        # Ensure variations list exists and is numbered correctly
-        if "variations" not in i2v_data or not isinstance(i2v_data["variations"], list):
-            i2v_data["variations"] = []
-        for idx, v in enumerate(i2v_data["variations"], start=1):
-            v["variation"] = idx
-        i2v_prompts.append(i2v_data)
-        print(f"[VideoPromptGen] I2V scene {scene_num}/{len(scenes)} done "
-              f"({len(i2v_data['variations'])} variations)")
+    # ── Part 1: Character Design Sheets ──
+    lines.append(separator)
+    lines.append("  PART 1: CHARACTER DESIGN SHEETS")
+    lines.append("  (Use these prompts in Grok / Midjourney / DALL-E / Flux)")
+    lines.append("  All characters on WHITE BACKGROUND for consistency")
+    lines.append(separator)
+    lines.append("")
+    lines.append(character_section.strip())
+    lines.append("")
 
-        # ── Generate T2V prompts (9 variations) ──
-        t2v_input = f"""{user_context}
+    # ── Part 2: Scene Prompt Table ──
+    lines.append(separator)
+    lines.append("  PART 2: SCENE PROMPTS (Text-to-Image vs Image-to-Video)")
+    lines.append("  Left: T2I prompt (for Grok/Midjourney)  |  Right: I2V prompt (for Runway/Kling)")
+    lines.append(separator)
+    lines.append("")
 
----
+    # Assemble scenes in order
+    scene_nums_sorted = sorted(scene_results.keys())
+    for scene_num in scene_nums_sorted:
+        scene_text_raw = ""
+        for s in scenes:
+            if s.get("scene_number", 0) == scene_num:
+                scene_text_raw = s.get("text", "")[:200]
+                break
 
-SCENE {scene_num}:
-{scene_text}
+        lines.append(thin_sep)
+        lines.append(f"  SCENE {scene_num}")
+        if scene_text_raw:
+            lines.append(f"  Script: {scene_text_raw}...")
+        lines.append(thin_sep)
+        lines.append("")
 
----
+        prompt_text = scene_results[scene_num]
 
-Generate exactly {PROMPTS_PER_SCENE} T2V prompt variations for this paragraph. Output only JSON."""
+        # Parse Characters, T2I, and I2V sections from the response
+        characters_line = ""
+        t2i_prompt = ""
+        i2v_prompt = ""
 
-        t2v_response = generate_text(t2v_input, system_prompt=T2V_SYSTEM_PROMPT)
-        t2v_data = _parse_json_response(t2v_response, {
-            "scene": scene_num,
-            "variations": [
-                {
-                    "variation": 1,
-                    "pov": "main character eye-level",
-                    "shot_type": "medium shot",
-                    "style": style,
-                    "action": scene_text[:200],
-                    "camera": "static",
-                    "lighting": "natural",
-                    "full_prompt": t2v_response.strip(),
-                }
-            ],
-        })
-        t2v_data["scene"] = scene_num
-        if "variations" not in t2v_data or not isinstance(t2v_data["variations"], list):
-            t2v_data["variations"] = []
-        for idx, v in enumerate(t2v_data["variations"], start=1):
-            v["variation"] = idx
-        t2v_prompts.append(t2v_data)
-        print(f"[VideoPromptGen] T2V scene {scene_num}/{len(scenes)} done "
-              f"({len(t2v_data['variations'])} variations)")
+        # Extract "Characters:" line if present
+        remaining = prompt_text
+        if "Characters:" in remaining:
+            before_chars, after_chars = remaining.split("Characters:", 1)
+            # Characters line ends at the next blank line or next section
+            char_end = after_chars.find("\n\n")
+            if char_end == -1:
+                char_end = after_chars.find("Text-to-Image:")
+            if char_end == -1:
+                characters_line = after_chars.strip()
+                remaining = ""
+            else:
+                characters_line = after_chars[:char_end].strip()
+                remaining = after_chars[char_end:]
 
-    # Save as .txt files containing JSON
+        if "Image-to-Video:" in remaining:
+            parts = remaining.split("Image-to-Video:", 1)
+            t2i_raw = parts[0]
+            i2v_prompt = parts[1].strip()
+            if "Text-to-Image:" in t2i_raw:
+                t2i_prompt = t2i_raw.split("Text-to-Image:", 1)[1].strip()
+            else:
+                t2i_prompt = t2i_raw.strip()
+        elif "Text-to-Image:" in remaining:
+            t2i_prompt = remaining.split("Text-to-Image:", 1)[1].strip()
+            i2v_prompt = "(generation failed - use T2I prompt as reference)"
+        else:
+            t2i_prompt = remaining.strip() or prompt_text.strip()
+            i2v_prompt = "(generation failed - use T2I prompt as reference)"
+
+        # Display characters in this scene
+        if characters_line:
+            lines.append(f"  Characters: {characters_line}")
+            lines.append("")
+
+        # Format as a clear side-by-side comparison
+        lines.append("  +-- TEXT-TO-IMAGE (Grok / Midjourney / DALL-E) --+")
+        lines.append("")
+        for tl in t2i_prompt.splitlines():
+            lines.append(f"  {tl}")
+        lines.append("")
+        lines.append("  +-- IMAGE-TO-VIDEO (Runway / Kling / Luma / Pika) --+")
+        lines.append("")
+        for il in i2v_prompt.splitlines():
+            lines.append(f"  {il}")
+        lines.append("")
+
+    lines.append(separator)
+    lines.append("  END OF PROMPT FILE")
+    lines.append(separator)
+
+    # ── Save ─────────────────────────────────────────────────────────────
     prefix = f"{name_prefix}_" if name_prefix else ""
-    i2v_path = output_dir / f"{prefix}image_to_video_prompts.txt"
-    t2v_path = output_dir / f"{prefix}text_to_video_prompts.txt"
-
-    i2v_output = {
-        "type": "image_to_video",
-        "user_preferences": {
-            "style": style,
-            "character": character,
-            "background": background,
-            "consistency": consistency,
-        },
-        "scenes": i2v_prompts,
-    }
-    t2v_output = {
-        "type": "text_to_video",
-        "user_preferences": {
-            "style": style,
-            "character": character,
-            "background": background,
-            "consistency": consistency,
-        },
-        "scenes": t2v_prompts,
-    }
-
-    i2v_path.write_text(
-        json.dumps(i2v_output, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
-    t2v_path.write_text(
-        json.dumps(t2v_output, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
-
-    total_i2v = sum(len(s.get("variations", [])) for s in i2v_prompts)
-    total_t2v = sum(len(s.get("variations", [])) for s in t2v_prompts)
+    output_path = output_dir / f"{prefix}video_prompts.txt"
+    output_path.write_text("\n".join(lines), encoding="utf-8")
 
     return {
-        "i2v_path": str(i2v_path),
-        "t2v_path": str(t2v_path),
-        "i2v_scene_count": len(i2v_prompts),
-        "t2v_scene_count": len(t2v_prompts),
-        "i2v_total_variations": total_i2v,
-        "t2v_total_variations": total_t2v,
+        "prompt_path": str(output_path),
+        "scene_count": total_scenes,
+        "character_section_length": len(character_section),
     }
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate I2V and T2V prompts")
+    parser = argparse.ArgumentParser(description="Generate video prompts")
     parser.add_argument("--scenes_json", required=True)
     parser.add_argument("--style", required=True)
     parser.add_argument("--character", required=True)
     parser.add_argument("--background", required=True)
     parser.add_argument("--consistency", action="store_true")
+    parser.add_argument("--script_text", default="")
     parser.add_argument("--output_dir", default=str(TMP_DIR / "video_prompts"))
     args = parser.parse_args()
 
@@ -305,6 +349,7 @@ if __name__ == "__main__":
 
     result = generate_video_prompts(
         scenes, args.style, args.character, args.background,
-        args.consistency, args.output_dir
+        args.consistency, args.output_dir, script_text=args.script_text,
     )
-    print(json.dumps(result, indent=2))
+    print(f"Output: {result['prompt_path']}")
+    print(f"Scenes: {result['scene_count']}")

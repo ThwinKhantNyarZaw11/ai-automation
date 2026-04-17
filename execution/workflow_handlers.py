@@ -287,9 +287,23 @@ async def _generate_wf1_chunk(session_id: str) -> list[dict]:
     for s in sources.get("sources", [])[:5]:
         source_texts += f"- {s.get('title', '')}: {s.get('snippet', '')}\n"
 
+    is_final = not full_script and words_this_chunk >= target_words  # single-chunk script
+    if full_script:
+        is_final = (words_remaining <= CHUNK_SIZE)
+
+    no_end_rule = "" if is_final else (
+        f"\n- ABSOLUTELY DO NOT conclude, wrap up, or end the story in this chunk. "
+        f"The full script must be {target_words} words total — you have only written "
+        f"{words_generated} so far. This is a MIDDLE section. Leave the narrative open "
+        f"and mid-flow so the next chunk can continue seamlessly."
+        f"\n- Do NOT write any closing phrases, moral lessons, or 'the end' type sentences."
+    )
+
     system_prompt = f"""You are a professional scriptwriter. You write scripts in {language}.
 
 USER'S STYLE INSTRUCTIONS: {user_prompt}
+
+OVERALL TARGET: {target_words} words total. Written so far: {words_generated}. This chunk: {words_this_chunk} words.
 
 CRITICAL RULES:
 - Write ENTIRELY in {language}
@@ -298,11 +312,12 @@ CRITICAL RULES:
 - Use natural, fluent {language} — not machine-translated text
 - Do NOT include any labels like "Part 1" or "Section 1" or headers
 - Do NOT repeat introductions or re-introduce the topic
-- Just write continuous, seamless script text that flows naturally"""
+- Just write continuous, seamless script text that flows naturally{no_end_rule}"""
 
     if not full_script:
         # First chunk — start the script
         prompt = f"""Write the beginning of a long script ({words_this_chunk} words) based on this video:
+This is the START of a {target_words}-word script. Do NOT conclude or end the story — leave it mid-flow.
 
 Title: {metadata.get('title', '')}
 Description: {metadata.get('description', '')[:500]}
@@ -313,11 +328,10 @@ Related Sources:
 {source_texts}
 
 Start the script directly. No title, no labels. Just begin naturally in {language}.
-Write exactly {words_this_chunk} words."""
+Write exactly {words_this_chunk} words. Do NOT end the story."""
     else:
         # Continuation — pick up from where we left off
         last_part = full_script[-1500:]
-        is_final = (words_remaining <= CHUNK_SIZE)
 
         if is_final:
             prompt = f"""Continue and CONCLUDE this script. Write exactly {words_this_chunk} words in {language}.
@@ -331,13 +345,14 @@ Write the final {words_this_chunk} words. Bring the script to a satisfying concl
 Continue directly from where it left off. No labels, no headers."""
         else:
             prompt = f"""Continue this script. Write exactly {words_this_chunk} words in {language}.
+You have written {words_generated}/{target_words} words. This is a MIDDLE chunk — do NOT end or conclude the story.
 
 The script so far ends with:
 \"\"\"
 {last_part}
 \"\"\"
 
-Continue directly from where it left off. No labels, no headers, no re-introductions. Seamless continuation."""
+Continue directly from where it left off. No labels, no headers, no re-introductions, no conclusions. Leave the narrative mid-flow."""
 
     set_state(session_id, State.WF1_GENERATING_SCRIPT)
     chunk_text = generate_text(prompt, system_prompt=system_prompt)
@@ -529,9 +544,23 @@ async def _generate_wf3_chunk(session_id: str) -> list[dict]:
     if words_this_chunk <= 0:
         return await _finish_wf3_script(session_id)
 
+    is_final = not full_script and words_this_chunk >= target_words
+    if full_script:
+        is_final = (words_remaining <= CHUNK_SIZE)
+
+    no_end_rule = "" if is_final else (
+        f"\n- ABSOLUTELY DO NOT conclude, wrap up, or end the story in this chunk. "
+        f"The full script must be {target_words} words total — you have only written "
+        f"{words_generated} so far. This is a MIDDLE section. Leave the narrative open "
+        f"and mid-flow so the next chunk can continue seamlessly."
+        f"\n- Do NOT write any closing phrases, moral lessons, or 'the end' type sentences."
+    )
+
     system_prompt = f"""You are a professional scriptwriter. You write scripts in {language}.
 
 USER'S STYLE INSTRUCTIONS: {user_prompt}
+
+OVERALL TARGET: {target_words} words total. Written so far: {words_generated}. This chunk: {words_this_chunk} words.
 
 CRITICAL RULES:
 - Write ENTIRELY in {language}
@@ -541,19 +570,19 @@ CRITICAL RULES:
 - Use natural, fluent {language} — not machine-translated text
 - Do NOT include any labels like "Part 1" or "Section 1" or headers
 - Do NOT repeat introductions or re-introduce the topic
-- Just write continuous, seamless script text that flows naturally"""
+- Just write continuous, seamless script text that flows naturally{no_end_rule}"""
 
     if not full_script:
         prompt = f"""Write the beginning of a long script ({words_this_chunk} words) based on this video:
+This is the START of a {target_words}-word script. Do NOT conclude or end the story — leave it mid-flow.
 
 Video Content Analysis:
 {content_analysis}
 
 Start the script directly. No title, no labels. Just begin naturally in {language}.
-Write exactly {words_this_chunk} words."""
+Write exactly {words_this_chunk} words. Do NOT end the story."""
     else:
         last_part = full_script[-1500:]
-        is_final = (words_remaining <= CHUNK_SIZE)
 
         if is_final:
             prompt = f"""Continue and CONCLUDE this script. Write exactly {words_this_chunk} words in {language}.
@@ -570,6 +599,7 @@ Write the final {words_this_chunk} words. Bring the script to a satisfying concl
 Continue directly from where it left off. No labels, no headers."""
         else:
             prompt = f"""Continue this script. Write exactly {words_this_chunk} words in {language}.
+You have written {words_generated}/{target_words} words. This is a MIDDLE chunk — do NOT end or conclude the story.
 
 Video Content Analysis:
 {content_analysis}
@@ -579,7 +609,7 @@ The script so far ends with:
 {last_part}
 \"\"\"
 
-Continue directly from where it left off. No labels, no headers, no re-introductions. Seamless continuation."""
+Continue directly from where it left off. No labels, no headers, no re-introductions, no conclusions. Leave the narrative mid-flow."""
 
     set_state(session_id, State.WF3_PROCESSING)
     chunk_text = generate_text(prompt, system_prompt=system_prompt)
@@ -687,71 +717,93 @@ async def _handle_wf4(session_id: str, state: State, text: str, files: list) -> 
 
     elif state == State.WF4_ASK_STYLE:
         set_data(session_id, "img_style", text.strip())
-        set_state(session_id, State.WF4_ASK_CHARACTER)
-        return [{"type": "message", "text": "Now describe your **character design**.\n\nInclude details like:\n- Age\n- Clothes\n- Facial features\n- Height / body type\n- Hair style & color\n- Any distinctive traits\n\n(e.g. \"A 25-year-old Burmese woman, wearing a traditional pink htamein and white blouse, long black hair, warm brown skin, gentle smile\")"}]
-
-    elif state == State.WF4_ASK_CHARACTER:
-        set_data(session_id, "img_character", text.strip())
-        set_state(session_id, State.WF4_ASK_BACKGROUND)
-        return [{"type": "message", "text": "Now describe your **background / setting**.\n\n(e.g. \"A traditional Burmese village with golden pagodas, teak houses, tropical palm trees, and a river in the distance\" or \"Inside a bustling zoo\", \"Modern city street\", etc.)"}]
-
-    elif state == State.WF4_ASK_BACKGROUND:
-        set_data(session_id, "img_background", text.strip())
         set_state(session_id, State.WF4_ASK_CONSISTENCY)
-        return [{"type": "prompt", "text": "Do you want all images to have **consistent characters** across all scenes?\n\n- **yes** = same character looks identical in every scene\n- **no** = characters can vary per scene", "options": ["yes", "no"]}]
+        return [{"type": "prompt", "text": "Do you want **full consistency** across all scenes?\n\n- **yes** = characters, clothes, background, art style, and visual details stay identical across every scene\n- **no** = allow variation between scenes", "options": ["yes", "no"]}]
 
     elif state == State.WF4_ASK_CONSISTENCY:
         consistency = text.strip().lower() in ["yes", "y", "1", "true"]
         set_data(session_id, "img_consistency", consistency)
         set_state(session_id, State.WF4_GENERATING_PROMPTS)
 
-        # Generate the two prompt files
         from execution.scene_splitter import split_into_scenes
         from execution.video_prompt_gen import generate_video_prompts
+        from execution.gemini_generate import generate_text
         from execution.file_handler import get_session_dir
         from execution.google_drive_upload import upload_to_drive
 
         data = get_data(session_id)
         session_dir = get_session_dir(session_id)
+        script_text = data.get("full_script", "") or data.get("original_script_text", "")
+
+        # Auto-extract character + background from script
+        excerpt = script_text[:3000]
+        extract_response = generate_text(
+            f"""Read the following script excerpt and extract:
+1. CHARACTER DESIGN - visual details of main character(s): age, gender, ethnicity, clothing, hair, body type, facial features, distinctive traits. Infer from context if not explicit.
+2. BACKGROUND / SETTING - visual details: location, architecture, landscape, lighting, weather, time of day, colors, atmosphere.
+
+Script excerpt:
+\"\"\"{excerpt}\"\"\"
+
+Respond in EXACTLY this format:
+CHARACTER: <description>
+BACKGROUND: <description>"""
+        )
+        img_character = ""
+        img_background = ""
+        for line in extract_response.strip().splitlines():
+            if line.upper().startswith("CHARACTER:"):
+                img_character = line.split(":", 1)[1].strip()
+            elif line.upper().startswith("BACKGROUND:"):
+                img_background = line.split(":", 1)[1].strip()
+        if not img_character:
+            img_character = "A character appropriate to the script's setting and tone"
+        if not img_background:
+            img_background = "A setting appropriate to the script's context"
+        set_data(session_id, "img_character", img_character)
+        set_data(session_id, "img_background", img_background)
+        print(f"[WF4] Auto-extracted character: {img_character[:100]}...")
+        print(f"[WF4] Auto-extracted background: {img_background[:100]}...")
 
         # Split modified script into scenes
         scenes_path = str(session_dir / "scenes.json")
         scenes = split_into_scenes(data["modified_script_path"], output_path=scenes_path)
         set_data(session_id, "scenes", scenes)
 
-        # Generate I2V and T2V prompts, named after the original script
+        # Generate single prompt file (character sheets + scene T2I/I2V table)
         stem = _safe_stem(data.get("source_name"), fallback="script")
         result = generate_video_prompts(
             scenes=scenes,
             style=data.get("img_style", ""),
-            character=data.get("img_character", ""),
-            background=data.get("img_background", ""),
-            consistency=data.get("img_consistency", True),
+            character=img_character,
+            background=img_background,
+            consistency=consistency,
             output_dir=str(session_dir / "video_prompts"),
             name_prefix=stem,
+            script_text=script_text,
         )
 
-        # Upload both files to Drive
-        i2v_drive = upload_to_drive(result["i2v_path"])
-        t2v_drive = upload_to_drive(result["t2v_path"])
-        i2v_name = Path(result["i2v_path"]).name
-        t2v_name = Path(result["t2v_path"]).name
+        # Upload prompt file to Drive
+        prompt_drive = upload_to_drive(result["prompt_path"])
+        prompt_name = Path(result["prompt_path"]).name
 
         set_state(session_id, State.WF4_COMPLETE)
-        total_i2v = result.get("i2v_total_variations", result.get("i2v_scene_count", len(scenes)))
-        total_t2v = result.get("t2v_total_variations", result.get("t2v_scene_count", len(scenes)))
         return [
             {"type": "message", "text": (
-                f"Generated prompts for {len(scenes)} scenes "
-                f"({total_i2v} I2V variations, {total_t2v} T2V variations)!\n\n"
+                f"Generated prompts for {len(scenes)} scenes!\n\n"
                 f"**Style:** {data.get('img_style', '')}\n"
-                f"**Character:** {data.get('img_character', '')}\n"
-                f"**Background:** {data.get('img_background', '')}\n"
-                f"**Consistency:** {'Yes' if consistency else 'No'}"
+                f"**Consistency:** {'Yes' if consistency else 'No'}\n\n"
+                f"The file contains:\n"
+                f"- **Part 1:** Character design sheets (front/side/back views for each character)\n"
+                f"- **Part 2:** Scene-by-scene Text-to-Image vs Image-to-Video prompts side by side"
             )},
-            {"type": "file_ready", "filename": i2v_name, "drive_url": i2v_drive["url"]},
-            {"type": "file_ready", "filename": t2v_name, "drive_url": t2v_drive["url"]},
-            {"type": "message", "text": "Both prompt files are ready! Each paragraph has 9 prompt variations.\n- **image_to_video_prompts.txt** — use with Runway Gen-3, Kling, Luma, Pika\n- **text_to_video_prompts.txt** — use with Sora, Veo, Kling, Runway"},
+            {"type": "file_ready", "filename": prompt_name, "drive_url": prompt_drive["url"]},
+            {"type": "message", "text": (
+                "**How to use:**\n"
+                "1. Use the character sheet prompts in Grok/Midjourney to generate consistent character reference images\n"
+                "2. Use T2I prompts to generate scene images in Grok/Midjourney\n"
+                "3. Use I2V prompts in Runway/Kling/Luma to animate each scene image into video"
+            )},
             {"type": "prompt", "text": "Do you want to process another script?", "options": ["yes", "no"]},
         ]
 
@@ -779,9 +831,21 @@ async def _generate_wf4_chunk(session_id: str) -> list[dict]:
     if words_this_chunk <= 0:
         return await _finish_wf4_script(session_id)
 
+    is_final = (words_remaining <= CHUNK_SIZE)
+
+    no_end_rule = "" if is_final else (
+        f"\n- ABSOLUTELY DO NOT conclude, wrap up, or end the story in this chunk. "
+        f"The full script must be {target_words} words total — you have only written "
+        f"{words_generated} so far. This is a MIDDLE section. Leave the narrative open "
+        f"and mid-flow so the next chunk can continue seamlessly."
+        f"\n- Do NOT write any closing phrases, moral lessons, or 'the end' type sentences."
+    )
+
     system_prompt = f"""You are an expert script editor. You write scripts in {language}.
 
 MODIFICATION INSTRUCTIONS: {instructions}
+
+OVERALL TARGET: {target_words} words total. Written so far: {words_generated}. This chunk: {words_this_chunk} words.
 
 CRITICAL RULES:
 - Write ENTIRELY in {language}
@@ -790,16 +854,17 @@ CRITICAL RULES:
 - Use natural, fluent {language} — not machine-translated text
 - Do NOT include any labels like "Part 1" or "Section 1" or headers
 - Do NOT repeat introductions or re-introduce the topic
-- Just write continuous, seamless script text that flows naturally"""
+- Just write continuous, seamless script text that flows naturally{no_end_rule}"""
 
     if not full_script:
         prompt = f"""Modify and rewrite the beginning of this script ({words_this_chunk} words) based on the instructions.
+This is the START of a {target_words}-word script. Do NOT conclude or end the story — leave it mid-flow.
 
 Original Script:
 {original_text[:3000]}
 
 Start the modified script directly. No title, no labels. Just begin naturally in {language}.
-Write exactly {words_this_chunk} words."""
+Write exactly {words_this_chunk} words. Do NOT end the story."""
     else:
         last_part = full_script[-1500:]
         # Calculate how much of the original we've roughly covered
@@ -807,7 +872,6 @@ Write exactly {words_this_chunk} words."""
         coverage_ratio = words_generated / target_words if target_words > 0 else 0
         orig_start = int(coverage_ratio * orig_words)
         orig_section = " ".join(original_text.split()[max(0, orig_start - 200):orig_start + 1500])
-        is_final = (words_remaining <= CHUNK_SIZE)
 
         if is_final:
             prompt = f"""Continue and CONCLUDE this modified script. Write exactly {words_this_chunk} words in {language}.
@@ -824,6 +888,7 @@ Write the final {words_this_chunk} words. Bring the script to a satisfying concl
 Continue directly from where it left off. No labels, no headers."""
         else:
             prompt = f"""Continue this modified script. Write exactly {words_this_chunk} words in {language}.
+You have written {words_generated}/{target_words} words. This is a MIDDLE chunk — do NOT end or conclude the story.
 
 Relevant section from original script:
 {orig_section[:2000]}
@@ -833,7 +898,7 @@ The modified script so far ends with:
 {last_part}
 \"\"\"
 
-Continue directly from where it left off. No labels, no headers, no re-introductions. Seamless continuation."""
+Continue directly from where it left off. No labels, no headers, no re-introductions, no conclusions. Leave the narrative mid-flow."""
 
     set_state(session_id, State.WF4_MODIFYING)
     chunk_text = generate_text(prompt, system_prompt=system_prompt)
