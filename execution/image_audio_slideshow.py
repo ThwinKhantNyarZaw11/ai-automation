@@ -98,10 +98,40 @@ def _make_clip(image_path: str, duration: float, zoom_in: bool, output_path: str
         raise RuntimeError(f"FFmpeg clip creation failed: {result.stderr[-500:]}")
 
 
+def _overlay_logo(video_path: str, logo_path: str, output_path: str,
+                  logo_width: int = 150, padding: int = 20):
+    """
+    Overlay a logo image onto a video in the upper-right corner.
+    Logo is scaled to logo_width px wide, positioned padding px from edges.
+    """
+    # Scale logo to fixed width, preserve aspect ratio, keep transparency
+    filter_complex = (
+        f"[1:v]scale={logo_width}:-1[logo];"
+        f"[0:v][logo]overlay=W-w-{padding}:{padding}"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-i", logo_path,
+        "-filter_complex", filter_complex,
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "22",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg logo overlay failed: {result.stderr[-500:]}")
+
+
 def create_slideshow(audio_path: str, image_paths: list[str],
-                     output_path: str = None) -> dict:
+                     output_path: str = None,
+                     logo_path: str = None) -> dict:
     """
     Create a slideshow video with Ken Burns zoom + audio.
+    Optionally overlays a logo in the upper-right corner.
 
     Returns dict with:
         video_path: final MP4 path
@@ -179,6 +209,15 @@ def create_slideshow(audio_path: str, image_paths: list[str],
     result = subprocess.run(mux_cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg mux failed: {result.stderr[-500:]}")
+
+    # Overlay logo in upper-right corner if provided
+    if logo_path and os.path.exists(logo_path):
+        print(f"[Slideshow] Adding logo overlay...")
+        logo_output = str(Path(output_path).with_suffix("")) + "_logo.mp4"
+        _overlay_logo(output_path, logo_path, logo_output)
+        # Replace final output with logo version
+        os.replace(logo_output, output_path)
+        print(f"[Slideshow] Logo overlay applied.")
 
     # Clean up intermediate clips
     try:

@@ -2,6 +2,7 @@
 FastAPI application entry point.
 Serves the chat UI, handles WebSocket connections and file uploads.
 """
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -69,7 +70,9 @@ async def websocket_endpoint(ws: WebSocket, workflow: str = Query(default=None))
                 text = data.get("text", "")
                 # Grab any pending uploaded files
                 files = _pending_files.pop(session_id, [])
-                responses = await handle_message(session_id, text, files)
+                # Run blocking handler in a thread so the event loop stays free
+                # for other concurrent WebSocket sessions
+                responses = await asyncio.to_thread(handle_message, session_id, text, files)
 
                 for resp in responses:
                     await ws.send_json(resp)

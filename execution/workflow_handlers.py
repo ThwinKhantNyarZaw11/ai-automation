@@ -89,7 +89,7 @@ def is_youtube_url(text: str) -> bool:
     return bool(re.search(r'(youtube\.com/watch|youtu\.be/)', text))
 
 
-async def handle_message(session_id: str, text: str, files: list[dict] = None) -> list[dict]:
+def handle_message(session_id: str, text: str, files: list[dict] = None) -> list[dict]:
     """
     Main message router. Returns a list of response messages.
     Each message is a dict: {"type": "message"|"sources"|"images"|"prompt"|"status"|"file_ready", ...}
@@ -110,27 +110,27 @@ async def handle_message(session_id: str, text: str, files: list[dict] = None) -
 
         # Workflow 1
         if state.name.startswith("WF1"):
-            return await _handle_wf1(session_id, state, text, files)
+            return _handle_wf1(session_id, state, text, files)
 
         # Workflow 2
         if state.name.startswith("WF2"):
-            return await _handle_wf2(session_id, state, text, files)
+            return _handle_wf2(session_id, state, text, files)
 
         # Workflow 3
         if state.name.startswith("WF3"):
-            return await _handle_wf3(session_id, state, text, files)
+            return _handle_wf3(session_id, state, text, files)
 
         # Workflow 4
         if state.name.startswith("WF4"):
-            return await _handle_wf4(session_id, state, text, files)
+            return _handle_wf4(session_id, state, text, files)
 
         # Workflow 5
         if state.name.startswith("WF5"):
-            return await _handle_wf5(session_id, state, text, files)
+            return _handle_wf5(session_id, state, text, files)
 
         # Workflow 6
         if state.name.startswith("WF6"):
-            return await _handle_wf6(session_id, state, text, files)
+            return _handle_wf6(session_id, state, text, files)
 
     except Exception as e:
         traceback.print_exc()
@@ -172,7 +172,7 @@ def _handle_idle(session_id: str, text: str) -> list[dict]:
 CHUNK_SIZE = 3000  # max words per generation/response
 
 
-async def _handle_wf1(session_id: str, state: State, text: str, files: list) -> list[dict]:
+def _handle_wf1(session_id: str, state: State, text: str, files: list) -> list[dict]:
     if state == State.WF1_AWAITING_LINK:
         if not is_youtube_url(text):
             return [{"type": "message", "text": "That doesn't look like a YouTube URL. Please send a valid YouTube link."}]
@@ -246,13 +246,13 @@ async def _handle_wf1(session_id: str, state: State, text: str, files: list) -> 
         set_data(session_id, "words_generated", 0)
 
         # Generate first chunk
-        return await _generate_wf1_chunk(session_id)
+        return _generate_wf1_chunk(session_id)
 
     elif state == State.WF1_CONTINUING:
         if text.strip().lower() in ["next", "continue", "more"]:
-            return await _generate_wf1_chunk(session_id)
+            return _generate_wf1_chunk(session_id)
         elif text.strip().lower() in ["done", "stop", "finish", "end"]:
-            return await _finish_wf1_script(session_id)
+            return _finish_wf1_script(session_id)
         else:
             return [{"type": "prompt", "text": "Send 'next' to continue generating, or 'done' to finish and save.", "options": ["next", "done"]}]
 
@@ -262,7 +262,7 @@ async def _handle_wf1(session_id: str, state: State, text: str, files: list) -> 
     return [{"type": "message", "text": "Something went wrong. Type 'restart' to start over."}]
 
 
-async def _generate_wf1_chunk(session_id: str) -> list[dict]:
+def _generate_wf1_chunk(session_id: str) -> list[dict]:
     """Generate the next chunk of the script (~3000 words)."""
     from execution.gemini_generate import generate_text
 
@@ -280,7 +280,7 @@ async def _generate_wf1_chunk(session_id: str) -> list[dict]:
     words_this_chunk = min(CHUNK_SIZE, words_remaining)
 
     if words_this_chunk <= 0:
-        return await _finish_wf1_script(session_id)
+        return _finish_wf1_script(session_id)
 
     # Build source context
     source_texts = ""
@@ -372,7 +372,7 @@ Continue directly from where it left off. No labels, no headers, no re-introduct
 
     if words_generated >= target_words:
         # Target reached — finish automatically
-        return responses + await _finish_wf1_script(session_id)
+        return responses + _finish_wf1_script(session_id)
     else:
         # More to go — wait for "next"
         set_state(session_id, State.WF1_CONTINUING)
@@ -380,7 +380,7 @@ Continue directly from where it left off. No labels, no headers, no re-introduct
         return responses
 
 
-async def _finish_wf1_script(session_id: str) -> list[dict]:
+def _finish_wf1_script(session_id: str) -> list[dict]:
     """Save the full script and upload to Drive."""
     from execution.file_handler import get_session_dir
     from execution.google_drive_upload import upload_to_drive
@@ -412,7 +412,7 @@ async def _finish_wf1_script(session_id: str) -> list[dict]:
 
 # ─── Workflow 2: Video + Audio Combiner ───
 
-async def _handle_wf2(session_id: str, state: State, text: str, files: list) -> list[dict]:
+def _handle_wf2(session_id: str, state: State, text: str, files: list) -> list[dict]:
     if state == State.WF2_AWAITING_FILES:
         data = get_data(session_id)
 
@@ -464,7 +464,7 @@ async def _handle_wf2(session_id: str, state: State, text: str, files: list) -> 
 
 # ─── Workflow 3: Video Changer ───
 
-async def _handle_wf3(session_id: str, state: State, text: str, files: list) -> list[dict]:
+def _handle_wf3(session_id: str, state: State, text: str, files: list) -> list[dict]:
     if state == State.WF3_AWAITING_VIDEO:
         for f in files:
             ext = f["filename"].rsplit(".", 1)[-1].lower() if "." in f["filename"] else ""
@@ -509,13 +509,13 @@ async def _handle_wf3(session_id: str, state: State, text: str, files: list) -> 
         set_data(session_id, "video_analysis", analysis)
 
         # Generate first chunk
-        return await _generate_wf3_chunk(session_id)
+        return _generate_wf3_chunk(session_id)
 
     elif state == State.WF3_CONTINUING:
         if text.strip().lower() in ["next", "continue", "more"]:
-            return await _generate_wf3_chunk(session_id)
+            return _generate_wf3_chunk(session_id)
         elif text.strip().lower() in ["done", "stop", "finish", "end"]:
-            return await _finish_wf3_script(session_id)
+            return _finish_wf3_script(session_id)
         else:
             return [{"type": "prompt", "text": "Send 'next' to continue generating, or 'done' to finish and save.", "options": ["next", "done"]}]
 
@@ -525,7 +525,7 @@ async def _handle_wf3(session_id: str, state: State, text: str, files: list) -> 
     return [{"type": "message", "text": "Something went wrong. Type 'restart' to start over."}]
 
 
-async def _generate_wf3_chunk(session_id: str) -> list[dict]:
+def _generate_wf3_chunk(session_id: str) -> list[dict]:
     """Generate the next chunk of the video script (~3000 words)."""
     from execution.gemini_generate import generate_text
 
@@ -542,7 +542,7 @@ async def _generate_wf3_chunk(session_id: str) -> list[dict]:
     words_this_chunk = min(CHUNK_SIZE, words_remaining)
 
     if words_this_chunk <= 0:
-        return await _finish_wf3_script(session_id)
+        return _finish_wf3_script(session_id)
 
     is_final = not full_script and words_this_chunk >= target_words
     if full_script:
@@ -627,14 +627,14 @@ Continue directly from where it left off. No labels, no headers, no re-introduct
     ]
 
     if words_generated >= target_words:
-        return responses + await _finish_wf3_script(session_id)
+        return responses + _finish_wf3_script(session_id)
     else:
         set_state(session_id, State.WF3_CONTINUING)
         responses.append({"type": "prompt", "text": f"{target_words - words_generated} words remaining. Send 'next' to continue or 'done' to finish early.", "options": ["next", "done"]})
         return responses
 
 
-async def _finish_wf3_script(session_id: str) -> list[dict]:
+def _finish_wf3_script(session_id: str) -> list[dict]:
     """Save the full video script and upload to Drive."""
     from execution.file_handler import get_session_dir
     from execution.google_drive_upload import upload_to_drive
@@ -664,7 +664,7 @@ async def _finish_wf3_script(session_id: str) -> list[dict]:
 
 # ─── Workflow 4: Script Changer + Image Generation ───
 
-async def _handle_wf4(session_id: str, state: State, text: str, files: list) -> list[dict]:
+def _handle_wf4(session_id: str, state: State, text: str, files: list) -> list[dict]:
     if state == State.WF4_AWAITING_SCRIPT:
         for f in files:
             ext = f["filename"].rsplit(".", 1)[-1].lower() if "." in f["filename"] else ""
@@ -705,13 +705,13 @@ async def _handle_wf4(session_id: str, state: State, text: str, files: list) -> 
         set_data(session_id, "original_script_text", original_text)
 
         # Generate first chunk
-        return await _generate_wf4_chunk(session_id)
+        return _generate_wf4_chunk(session_id)
 
     elif state == State.WF4_CONTINUING:
         if text.strip().lower() in ["next", "continue", "more"]:
-            return await _generate_wf4_chunk(session_id)
+            return _generate_wf4_chunk(session_id)
         elif text.strip().lower() in ["done", "stop", "finish", "end"]:
-            return await _finish_wf4_script(session_id)
+            return _finish_wf4_script(session_id)
         else:
             return [{"type": "prompt", "text": "Send 'next' to continue generating, or 'done' to finish and save.", "options": ["next", "done"]}]
 
@@ -813,7 +813,7 @@ BACKGROUND: <description>"""
     return [{"type": "message", "text": "Something went wrong. Type 'restart' to start over."}]
 
 
-async def _generate_wf4_chunk(session_id: str) -> list[dict]:
+def _generate_wf4_chunk(session_id: str) -> list[dict]:
     """Generate the next chunk of the modified script (~3000 words)."""
     from execution.gemini_generate import generate_text
 
@@ -829,7 +829,7 @@ async def _generate_wf4_chunk(session_id: str) -> list[dict]:
     words_this_chunk = min(CHUNK_SIZE, words_remaining)
 
     if words_this_chunk <= 0:
-        return await _finish_wf4_script(session_id)
+        return _finish_wf4_script(session_id)
 
     is_final = (words_remaining <= CHUNK_SIZE)
 
@@ -916,14 +916,14 @@ Continue directly from where it left off. No labels, no headers, no re-introduct
     ]
 
     if words_generated >= target_words:
-        return responses + await _finish_wf4_script(session_id)
+        return responses + _finish_wf4_script(session_id)
     else:
         set_state(session_id, State.WF4_CONTINUING)
         responses.append({"type": "prompt", "text": f"{target_words - words_generated} words remaining. Send 'next' to continue or 'done' to finish early.", "options": ["next", "done"]})
         return responses
 
 
-async def _finish_wf4_script(session_id: str) -> list[dict]:
+def _finish_wf4_script(session_id: str) -> list[dict]:
     """Save the full modified script and upload to Drive."""
     from execution.file_handler import get_session_dir
     from execution.google_drive_upload import upload_to_drive
@@ -953,18 +953,18 @@ async def _finish_wf4_script(session_id: str) -> list[dict]:
 
 # ─── Workflow 5: Image + Audio Slideshow ───
 
-async def _handle_wf5(session_id: str, state: State, text: str, files: list) -> list[dict]:
+def _handle_wf5(session_id: str, state: State, text: str, files: list) -> list[dict]:
+    audio_exts = {"mp3", "wav", "aac", "flac", "ogg", "m4a"}
+    image_exts = {"jpg", "jpeg", "png", "webp", "bmp"}
+    logo_exts  = {"jpg", "jpeg", "png", "webp"}
+
     if state == State.WF5_AWAITING_FILES:
         data = get_data(session_id)
 
-        audio_exts = {"mp3", "wav", "aac", "flac", "ogg", "m4a"}
-        image_exts = {"jpg", "jpeg", "png", "webp", "bmp"}
-
-        audio_path = data.get("audio_path")
+        audio_path  = data.get("audio_path")
         image_paths = list(data.get("image_paths", []))
-        audio_name = data.get("source_name")
+        audio_name  = data.get("source_name")
 
-        # Accept any newly uploaded files
         for f in files:
             ext = f["filename"].rsplit(".", 1)[-1].lower() if "." in f["filename"] else ""
             if ext in audio_exts and not audio_path:
@@ -978,12 +978,11 @@ async def _handle_wf5(session_id: str, state: State, text: str, files: list) -> 
         if audio_name:
             set_data(session_id, "source_name", audio_name)
 
-        # If we don't yet have both, tell the user what's missing
         if not audio_path or len(image_paths) < 1:
             missing = []
             if not audio_path:
                 missing.append("audio file")
-            if len(image_paths) < 1:
+            if not image_paths:
                 missing.append("at least 1 image")
             have = []
             if audio_path:
@@ -991,54 +990,41 @@ async def _handle_wf5(session_id: str, state: State, text: str, files: list) -> 
             if image_paths:
                 have.append(f"{len(image_paths)} image(s)")
             have_str = ", ".join(have) if have else "nothing yet"
-            return [{
-                "type": "message",
-                "text": f"Received: {have_str}.\nStill waiting for: {', '.join(missing)}.\n\nYou can upload multiple images at once. When done, send any message (e.g. 'go') to start processing."
-            }]
+            return [{"type": "message", "text": (
+                f"Received: {have_str}.\nStill waiting for: {', '.join(missing)}.\n\n"
+                "You can upload multiple images at once. When done, send any message (e.g. 'go') to start."
+            )}]
 
-        # Also allow the user to explicitly trigger with a message after all files uploaded
-        # If they just uploaded files this turn, proceed automatically.
-        set_state(session_id, State.WF5_PROCESSING)
+        # All required files present — ask about logo
+        set_state(session_id, State.WF5_ASK_LOGO)
+        return [{"type": "prompt",
+                 "text": (
+                     f"Got it! {len(image_paths)} image(s) + 1 audio file ready.\n\n"
+                     "Do you want to add a **logo** to the video?\n"
+                     "- Upload a logo image (PNG/JPG) and it will appear in the **upper-right corner**\n"
+                     "- Or type **skip** to create the video without a logo"
+                 ),
+                 "options": ["skip"]}]
 
-        # Run the slideshow generation
-        from execution.image_audio_slideshow import create_slideshow, get_audio_duration
-        from execution.file_handler import get_session_dir
-        from execution.google_drive_upload import upload_to_drive
+    elif state == State.WF5_ASK_LOGO:
+        data = get_data(session_id)
+        logo_path = None
 
-        try:
-            audio_duration = get_audio_duration(audio_path)
-        except Exception as e:
-            return [{"type": "message", "text": f"Could not read audio duration: {e}"}]
+        # Check if user uploaded a logo file
+        for f in files:
+            ext = f["filename"].rsplit(".", 1)[-1].lower() if "." in f["filename"] else ""
+            if ext in logo_exts:
+                logo_path = f["path"]
+                break
 
-        num_images = len(image_paths)
-        per_image = audio_duration / num_images
+        # If no file uploaded and user didn't type skip, re-prompt
+        if not logo_path and text.strip().lower() not in ("skip", "no", "none", "-"):
+            return [{"type": "prompt",
+                     "text": "Please upload a logo image (PNG/JPG) or type **skip** to continue without one.",
+                     "options": ["skip"]}]
 
-        status_msg = {
-            "type": "status",
-            "text": (
-                f"Creating slideshow...\n"
-                f"- Audio duration: {audio_duration:.1f}s\n"
-                f"- Images: {num_images}\n"
-                f"- Per image: {per_image:.1f}s\n"
-                f"- Effect: alternating zoom in / zoom out"
-            ),
-        }
-
-        stem = _safe_stem(get_data(session_id).get("source_name"), fallback="slideshow")
-        filename = f"{stem}.mp4"
-        output_path = str(get_session_dir(session_id) / filename)
-        result = create_slideshow(audio_path, image_paths, output_path)
-
-        set_state(session_id, State.WF5_UPLOADING)
-        drive_result = upload_to_drive(output_path)
-
-        set_state(session_id, State.WF5_COMPLETE)
-        return [
-            status_msg,
-            {"type": "message", "text": f"Slideshow created! Duration: {result['duration']:.1f}s, {result['image_count']} images at {result['per_image_duration']:.1f}s each."},
-            {"type": "file_ready", "filename": filename, "drive_url": drive_result["url"]},
-            {"type": "prompt", "text": "Do you want to create another slideshow?", "options": ["yes", "no"]},
-        ]
+        set_data(session_id, "logo_path", logo_path)
+        return _run_wf5_slideshow(session_id)
 
     elif state == State.WF5_COMPLETE:
         return _handle_restart(session_id, text)
@@ -1046,9 +1032,59 @@ async def _handle_wf5(session_id: str, state: State, text: str, files: list) -> 
     return [{"type": "message", "text": "Something went wrong. Type 'restart' to start over."}]
 
 
+def _run_wf5_slideshow(session_id: str) -> list[dict]:
+    """Create the slideshow and upload to Drive."""
+    from execution.image_audio_slideshow import create_slideshow, get_audio_duration
+    from execution.file_handler import get_session_dir
+    from execution.google_drive_upload import upload_to_drive
+
+    data        = get_data(session_id)
+    audio_path  = data["audio_path"]
+    image_paths = data["image_paths"]
+    logo_path   = data.get("logo_path")
+
+    try:
+        audio_duration = get_audio_duration(audio_path)
+    except Exception as e:
+        return [{"type": "message", "text": f"Could not read audio duration: {e}"}]
+
+    num_images = len(image_paths)
+    per_image  = audio_duration / num_images
+
+    logo_note = " + logo overlay" if logo_path else ""
+    status_msg = {"type": "status", "text": (
+        f"Creating slideshow{logo_note}...\n"
+        f"- Audio duration: {audio_duration:.1f}s\n"
+        f"- Images: {num_images}\n"
+        f"- Per image: {per_image:.1f}s\n"
+        f"- Effect: alternating zoom in / zoom out"
+    )}
+
+    set_state(session_id, State.WF5_PROCESSING)
+    stem     = _safe_stem(data.get("source_name"), fallback="slideshow")
+    filename = f"{stem}.mp4"
+    output_path = str(get_session_dir(session_id) / filename)
+    result = create_slideshow(audio_path, image_paths, output_path, logo_path=logo_path)
+
+    set_state(session_id, State.WF5_UPLOADING)
+    drive_result = upload_to_drive(output_path)
+
+    set_state(session_id, State.WF5_COMPLETE)
+    return [
+        status_msg,
+        {"type": "message", "text": (
+            f"Slideshow created! Duration: {result['duration']:.1f}s, "
+            f"{result['image_count']} images at {result['per_image_duration']:.1f}s each."
+            + (f"\nLogo applied to upper-right corner." if logo_path else "")
+        )},
+        {"type": "file_ready", "filename": filename, "drive_url": drive_result["url"]},
+        {"type": "prompt", "text": "Do you want to create another slideshow?", "options": ["yes", "no"]},
+    ]
+
+
 # ─── Workflow 6: Script to Voice ────────────────────────────────────────────
 
-async def _handle_wf6(session_id: str, state: State, text: str, files: list) -> list[dict]:
+def _handle_wf6(session_id: str, state: State, text: str, files: list) -> list[dict]:
     from execution.tts_generator import (
         generate_speech, format_voice_menu, resolve_voice, extract_text_pages
     )
